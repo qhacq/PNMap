@@ -98,7 +98,8 @@ def test_load_real_csv():
     teams = load_teams(Settings().clubs_csv)
     assert len(teams) == 36
     assert {t.current_pool for t in teams} == {"A", "B", "C"}
-    assert sum(t.a_verifier for t in teams) == 9
+    assert sum(t.a_verifier for t in teams) == 8
+    assert next(t for t in teams if t.id == 30).adresse.startswith("66 route de Mulhouse")
 
 
 def test_geocoding_and_cache(state, client):

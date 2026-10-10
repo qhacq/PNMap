@@ -73,6 +73,10 @@ class AppState:
         """Correction manuelle, sinon cache Nominatim, sinon coordonnées approximatives livrées."""
         if self._apply_correction(t):
             return
+        hit = self.geocoder.cached_address(t.adresse) if t.adresse else None
+        if hit:
+            self._set_location(t, hit, "adresse")
+            return
         hit = self.geocoder.cached_commune(t.commune)
         if hit:
             self._set_location(t, hit, "nominatim")
@@ -87,14 +91,19 @@ class AppState:
 
     def geocode_all(self, retry_failed: bool = False) -> None:
         """Interroge Nominatim pour les communes pas encore géocodées (les autres viennent du cache)."""
-        todo = [t for t in self.teams if not self._apply_correction(t) and t.commune
-                and (retry_failed or not self.geocoder.cached_commune(t.commune))]
+        todo = [t for t in self.teams if not self._apply_correction(t) and (t.commune or t.adresse)
+                and (retry_failed or not (self.geocoder.cached_address(t.adresse) if t.adresse
+                                          else self.geocoder.cached_commune(t.commune)))]
         self.job.update(step="Géocodage des communes (Nominatim)", done=0, total=len(todo))
         for t in todo:
-            loc = self.geocoder.geocode_commune(t.commune, retry_failed=retry_failed)
+            loc, source = None, "nominatim"
+            if t.adresse:  # adresse de la salle fournie dans le CSV : prioritaire
+                loc, source = self.geocoder.geocode_address(t.adresse, retry_failed=retry_failed), "adresse"
+            if not loc and t.commune:
+                loc, source = self.geocoder.geocode_commune(t.commune, retry_failed=retry_failed), "nominatim"
             with self.lock:
                 if loc:
-                    self._set_location(t, loc, "nominatim")
+                    self._set_location(t, loc, source)
                 else:
                     self._locate_without_network(t)  # garde la position approximative
             self.job["done"] += 1
@@ -246,6 +255,24 @@ class AppState:
             out.update(assignment=assignment, metrics=metrics, gap=gap, optimal=self.optimal)
         return out
 
+    def _auto_optimize(self) -> None:
+        """(Re)calcule la version optimale si elle manque ou si la matrice a changé,
+        avec les derniers réglages utilisés."""
+        if self.matrix is None or (self.optimal_is_fresh and self.optimal_assignment()):
+            return
+        req = dict((self.optimal or {}).get("params") or {})
+        sizes = req.get("pool_sizes") or {}
+        if set(sizes) != set(self.pools) or sum(sizes.values()) != len(self.teams):
+            req["pool_sizes"] = self.default_pool_sizes()
+        if self.optimal_assignment():
+            req["hint"] = {str(k): v for k, v in self.optimal_assignment().items()}
+        tl = req.get("time_limit") or self.settings.default_time_limit
+        self.job.update(step=f"Calcul de la version optimale (jusqu'à {tl:.0f} s)", done=0, total=0)
+        try:
+            self.optimize(req)
+        except ValueError:
+            self.optimize({"pool_sizes": self.default_pool_sizes()})
+
     def optimal_assignment(self) -> dict[int, str] | None:
         if not self.optimal:
             return None
@@ -266,24 +293,15 @@ class AppState:
                     before = [(t.lat, t.lon) for t in self.teams]
                     if self.matrix is None:
                         self.compute_matrix(use_osrm)
+                    if optimize:
+                        self._auto_optimize()  # version optimale disponible sans attendre Nominatim
                     self.geocode_all(retry_failed)
                     if self.matrix is None or [(t.lat, t.lon) for t in self.teams] != before:
                         self.compute_matrix(use_osrm)
                 else:
                     self.compute_matrix(use_osrm)
-                if optimize and self.matrix is not None and not (self.optimal_is_fresh and self.optimal_assignment()):
-                    # Version optimale calculée au lancement (ou après un changement de matrice),
-                    # avec les derniers réglages utilisés.
-                    req = dict((self.optimal or {}).get("params") or {})
-                    if set((req.get("pool_sizes") or {})) != set(self.pools) or \
-                            sum((req.get("pool_sizes") or {}).values()) != len(self.teams):
-                        req["pool_sizes"] = self.default_pool_sizes()
-                    tl = req.get("time_limit") or self.settings.default_time_limit
-                    self.job.update(step=f"Optimisation initiale (jusqu'à {tl:.0f} s)", done=0, total=0)
-                    try:
-                        self.optimize(req)
-                    except ValueError:
-                        self.optimize({"pool_sizes": self.default_pool_sizes()})
+                if optimize:
+                    self._auto_optimize()
                 self.job["error"] = None
             except Exception as exc:  # affiché dans l'interface
                 log.exception("Tâche de fond en échec")

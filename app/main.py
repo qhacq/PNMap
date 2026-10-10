@@ -92,6 +92,7 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
             "default_time_limit": settings.default_time_limit,
             "optimal": s.optimal,
             "optimal_fresh": s.optimal_is_fresh,
+            "matrix_key": s.matrix_key,
             "matrix_ready": s.matrix is not None,
             "matrix_source": s.matrix.source if s.matrix else None,
             "matrix_error": s.matrix_error,
@@ -102,6 +103,7 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
     def get_status():
         s = st()
         return {"job": s.job, "matrix_ready": s.matrix is not None, "optimal_fresh": s.optimal_is_fresh,
+                "matrix_key": s.matrix_key, "optimal_at": (s.optimal or {}).get("computed_at"),
                 "matrix_source": s.matrix.source if s.matrix else None, "matrix_error": s.matrix_error}
 
     @app.get("/api/ui-state")

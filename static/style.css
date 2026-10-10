@@ -203,3 +203,19 @@ table.compare tr.small td { white-space: normal; font-size: 12px; color: var(--m
 .exports { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
 .exports h2 { margin: 0 8px 0 0; }
 @media (max-width: 1100px) { .sum-grid, .adv-grid { grid-template-columns: 1fr 1fr; } }
+
+/* --- comparatif principal --- */
+table.cmp { border-collapse: collapse; width: 100%; font-size: 15px; font-variant-numeric: tabular-nums; }
+table.cmp th, table.cmp td { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: right; }
+table.cmp th:first-child { text-align: left; white-space: nowrap; }
+table.cmp thead th { font-size: 14px; vertical-align: bottom; }
+table.cmp td b { font-size: 18px; }
+table.cmp td small { display: block; font-size: 12px; }
+table.cmp tfoot th, table.cmp tfoot td { border-top: 2px solid var(--text); border-bottom: 0; }
+table.cmp tfoot td b { font-size: 22px; }
+table.cmp .shown { background: #eef4ff; }
+table.cmp td.na { color: var(--muted); }
+table.cmp tbody th svg { vertical-align: -2px; margin-right: 4px; }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; font-weight: 600; text-decoration: underline; }
+table.cmp tbody th button.link { font-size: 12px; font-weight: 400; margin-left: 6px; }
+.seg button.pending { color: var(--muted); font-style: italic; }

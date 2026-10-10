@@ -22,6 +22,7 @@ class Team:
     current_pool: str
     commune: str
     a_verifier: bool
+    adresse: str = ""
     lat: float | None = None
     lon: float | None = None
     geo_label: str = ""
@@ -69,6 +70,7 @@ def load_teams(path: Path) -> list[Team]:
                 current_pool=row.get("poule_actuelle", "").upper(),
                 commune=row.get("commune_geocodage", ""),
                 a_verifier=_truthy(row.get("a_verifier", "")),
+                adresse=row.get("adresse_salle", ""),
             ))
     ids = [t.id for t in teams]
     if len(ids) != len(set(ids)):

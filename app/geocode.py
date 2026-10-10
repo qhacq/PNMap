@@ -68,6 +68,10 @@ class Geocoder:
         hit = self._cache.get(f"commune:{commune.strip().lower()}") if commune.strip() else None
         return None if not hit or hit.get("failed") else hit
 
+    def cached_address(self, address: str) -> dict | None:
+        hit = self._cache.get(f"adresse:{address.strip().lower()}") if address.strip() else None
+        return None if not hit or hit.get("failed") else hit
+
     def geocode_commune(self, commune: str, retry_failed: bool = False) -> dict | None:
         commune = commune.strip()
         if not commune:

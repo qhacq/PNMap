@@ -223,7 +223,7 @@ function redo() {
 }
 
 // ------------------------------------------------------------------ carte
-const map = L.map("map").setView([48.7, 5.9], 8);
+const map = L.map("map", { zoomSnap: 0.25 }).setView([48.7, 5.9], 8);
 const geoMap = L.map("geo-map").setView([48.7, 5.9], 8);
 for (const m of [map, geoMap]) {
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -352,7 +352,15 @@ function selectTeam(id) {
 }
 
 function setView(v) {
-  if (!S.V[v]) return;
+  if (!S.V[v]) {
+    S.notice = v === "optimal"
+      ? (S.jobRunning ? "La version optimale est en cours de calcul : elle sera cliquable dans quelques secondes."
+        : "La version optimale n'est pas encore calculée : ouvrir « Outils avancés » puis « Optimiser ».")
+      : `${VERSION_NAMES[v]} indisponible.`;
+    renderSummary();
+    return;
+  }
+  S.notice = null;
   S.view = v;
   $$("#view-seg button").forEach(b => b.setAttribute("aria-checked", String(b.dataset.view === v)));
   saveUi();
@@ -623,34 +631,70 @@ function renderCompare() {
 
 function renderSummary() {
   const box = $("#summary");
-  const A = S.V[S.view];
-  const M = metricsOf(A);
   $$(".mine-only").forEach(e => e.classList.toggle("hidden", S.view !== "mine"));
+  $$("#view-seg button").forEach(b => {
+    const pending = !S.V[b.dataset.view];
+    b.classList.toggle("pending", pending);
+    b.textContent = VERSION_NAMES[b.dataset.view] + (pending && b.dataset.view === "optimal" ? (S.jobRunning ? " (calcul…)" : " (non calculée)") : "");
+    b.setAttribute("aria-checked", String(b.dataset.view === S.view));
+  });
   const missing = S.teams.filter(t => !t.located);
   const warn = missing.length ? `<p class="warn-line">⚠ ${missing.length} équipe(s) sans localisation, km non comptés :
     ${missing.map(t => esc(t.name)).join(", ")}. <a href="#" data-goto-geo>Indiquer la commune ou la salle</a></p>` : "";
-  if (!M) {
+  const notice = S.notice ? `<p class="warn-line">${esc(S.notice)}</p>` : "";
+  const versions = ["current", "optimal", "mine"];
+  const M = Object.fromEntries(versions.map(v => [v, metricsOf(S.V[v])]));
+  if (!M.current) {
     box.innerHTML = `<p class="big-wait">${S.jobRunning ? "⏳ Calcul des distances en cours…" :
-      esc(S.matrixError || "Distances pas encore calculées.")}</p>${warn}`;
+      esc(S.matrixError || "Distances pas encore calculées.")}</p>${notice}${warn}`;
   } else {
-    const O = metricsOf(S.V.optimal), C = metricsOf(S.V.current);
-    const vs = [S.view !== "current" && C ? `vs poules actuelles : ${delta(M.total, C.total)}` : "",
-      S.view !== "optimal" && O ? `vs version optimale : ${delta(M.total, O.total)}` : "",
-      S.view === "optimal" ? (S.optimalInfo ? (S.optimalInfo.proven ? `<span class="tag ok">✔ optimale prouvée</span>`
-        : `<span class="tag warn">meilleure trouvée</span>`) : "") : "",
-      S.view !== "optimal" && !O ? `<span class="muted">version optimale : ${S.jobRunning ? "calcul en cours…" : "non calculée"}</span>` : "",
-    ].filter(Boolean).join(" · ");
-    box.innerHTML = `<div class="sum-grid">
-      <div class="sum-total"><div class="v">${fmt(M.total)} km</div>
-        <div class="l">au total sur la saison (${esc(VERSION_NAMES[S.view])})</div></div>
-      ${S.pools.map(p => `<div class="sum-pool"><div class="v">${shapeSvg(p, 16)} ${fmt(M.pools[p].km)} km</div>
-        <div class="l">Poule ${esc(p)} · ${M.pools[p].size} équipes · ${fmt(M.pools[p].avg)} km par équipe</div></div>`).join("")}
-    </div>
-    <p class="sum-line">${vs}</p>
-    <p class="hint">Chaque équipe reçoit puis se déplace une fois chez chacune des autres équipes de sa poule :
-      les km d'une équipe sont la somme de ses allers-retours, ceux d'une poule la somme de ses équipes.</p>${warn}`;
+    const cell = (v, val, ref) => {
+      if (!M[v]) return `<td class="na">${v === "optimal" && S.jobRunning ? "calcul…" : "-"}</td>`;
+      const d = ref != null && v !== "current" ? `<small>${delta(val, ref)}</small>` : "";
+      return `<td class="${v === S.view ? "shown" : ""}"><b>${fmt(val)}</b> km${d}</td>`;
+    };
+    const rows = S.pools.map(p => `<tr><th>${shapeSvg(p, 14)} Poule ${esc(p)}
+        <button class="link" data-matches="${esc(p)}" title="Détail des rencontres de cette poule (répartition affichée)">rencontres</button></th>
+      ${versions.map(v => cell(v, M[v]?.pools[p].km, M.current.pools[p].km)).join("")}</tr>`).join("");
+    const status = S.optimalInfo ? (S.optimalInfo.proven ? "optimale prouvée" : "meilleure trouvée") : "";
+    box.innerHTML = `
+      <table class="cmp">
+        <thead><tr><th>Km des rencontres aller-retour</th>${versions.map(v =>
+          `<th class="${v === S.view ? "shown" : ""}"><button class="link" data-show-col="${v}">${VERSION_NAMES[v]}</button>
+           ${v === "optimal" && status ? `<div class="small muted">${status}</div>` : ""}</th>`).join("")}</tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr><th>Total des 3 poules</th>${versions.map(v => cell(v, M[v]?.total, M.current.total)).join("")}</tr></tfoot>
+      </table>
+      <p class="hint">Dans une poule, chaque équipe reçoit une fois et se déplace une fois chez chacune des autres :
+        pour deux équipes, les deux rencontres font 2 allers-retours. Le km d'une poule est la somme de toutes ses rencontres.
+        Les écarts sont calculés par rapport aux poules actuelles. Colonne surlignée : répartition affichée sur la carte et ci-dessous.</p>
+      ${notice}${warn}`;
   }
   $$("[data-goto-geo]", box).forEach(a => a.addEventListener("click", e => { e.preventDefault(); $(".tab[data-tab=geocodage]").click(); }));
+  $$("[data-show-col]", box).forEach(b => b.addEventListener("click", () => { setView(b.dataset.showCol); if (S.V[b.dataset.showCol]) renderAll(); }));
+  $$("[data-matches]", box).forEach(b => b.addEventListener("click", () => openMatches(b.dataset.matches)));
+}
+
+/** Détail des rencontres aller-retour d'une poule de la répartition affichée. */
+function openMatches(pool) {
+  const A = S.V[S.view];
+  if (!A || !S.R) return;
+  const ids = S.teams.filter(t => A[t.id] === pool).map(t => t.id);
+  const pairs = [];
+  for (let x = 0; x < ids.length; x++) {
+    for (let y = x + 1; y < ids.length; y++) {
+      const i = S.idx[ids[x]], j = S.idx[ids[y]];
+      pairs.push({ a: ids[x], b: ids[y], oneway: (S.D[i][j] + S.D[j][i]) / 2, both: 2 * S.R[i][j] });
+    }
+  }
+  pairs.sort((u, v) => v.both - u.both);
+  const total = pairs.reduce((s, p) => s + p.both, 0);
+  const name = id => `${id}. ${esc(shortName(S.byId[id].name))}`;
+  $("#matches-title").innerHTML = `${shapeSvg(pool, 14)} Poule ${esc(pool)} (${esc(VERSION_NAMES[S.view])}) : ${pairs.length} paires, ${pairs.length * 2} rencontres, <b>${fmt(total)} km</b>`;
+  $("#matches-table").innerHTML = `<thead><tr><th>Équipe</th><th>Équipe</th><th>Distance (aller)</th><th>Km des 2 rencontres<br><small>2 allers-retours</small></th></tr></thead><tbody>` +
+    pairs.map(p => `<tr><td>${name(p.a)}</td><td>${name(p.b)}</td><td>${fmt(p.oneway)} km</td><td>${fmt(p.both)} km</td></tr>`).join("") +
+    `</tbody><tfoot><tr><th colspan="3">Total de la poule</th><th>${fmt(total)} km</th></tr></tfoot>`;
+  $("#matches-dialog").showModal();
 }
 
 function renderAll() {
@@ -946,6 +990,12 @@ async function pollStatus() {
       const st = await api("/api/status");
       S.jobRunning = st.job.running;
       renderStatus(st);
+      // Résultats intermédiaires (matrice, version optimale) affichés sans attendre la fin de la tâche.
+      const changed = st.matrix_key !== S.matrixKey || (st.optimal_at || null) !== (S.optimalInfo?.computed_at || null);
+      if (st.job.running && changed && st.matrix_ready) {
+        S.matrixKey = st.matrix_key;
+        await reloadData();
+      }
       if (!st.job.running) {
         await reloadData();
         break;
@@ -987,9 +1037,10 @@ async function loadState() {
 
 /** Recharge positions, matrice et version optimale (après une tâche de fond). */
 async function reloadData() {
-  await loadState();
+  const st = await loadState();
   if (S.matrixReady) {
     await loadMatrix();
+    S.matrixKey = st.matrix_key;
   } else {
     S.R = S.H = S.D = null;
   }

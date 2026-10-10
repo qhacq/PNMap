@@ -25,11 +25,15 @@ démarre le serveur et ouvre <http://127.0.0.1:8000/>.
 Les kilomètres s'affichent dès l'ouverture : l'application part des positions approximatives des
 communes livrées dans `data/communes.json`, puis les affine en arrière-plan avec Nominatim (environ 40 s
 au premier lancement, une requête par seconde) et calcule la version optimale. La progression s'affiche
-en haut à droite. Une équipe sans commune (BASKET NORD SUNDGAU dans le fichier fourni) ne bloque rien :
-elle est signalée et compte 0 km tant qu'on n'a pas indiqué sa salle dans l'onglet Géocodage.
+en haut à droite. La version optimale est calculée dans la foulée (une quinzaine de secondes) et devient alors
+cliquable. Une équipe sans localisation ne bloque rien : elle est signalée et compte 0 km tant qu'on
+n'a pas indiqué sa salle dans l'onglet Géocodage.
 
-L'écran principal reste simple : choix de la répartition affichée (poules actuelles, version optimale,
-Ma version), km total et km par poule, carte, puis les trois poules avec les km de chaque équipe.
+L'écran principal reste simple : un tableau compare, pour chaque poule et au total, les km des
+rencontres aller-retour des trois répartitions (poules actuelles, version optimale, Ma version), avec
+l'écart par rapport aux poules actuelles. Le lien « rencontres » d'une poule détaille chaque paire
+d'équipes (distance et km des deux rencontres). Viennent ensuite la carte et les trois poules avec
+les km de chaque équipe.
 Le reste est rangé dans « Outils avancés ».
 
 ## Utilisation
@@ -116,7 +120,8 @@ poules actuelles.
 
 | Fichier | Rôle |
 |---|---|
-| `data/clubs.csv` | équipes (`id, club_ffbb, poule_actuelle, commune_geocodage, a_verifier`) |
+| `data/clubs.csv` | équipes (`id, club_ffbb, poule_actuelle, commune_geocodage, a_verifier`, et `adresse_salle` facultative : si elle est remplie, c'est elle qui est géocodée) |
+| `data/communes.json` | positions approximatives des communes, utilisées tant que Nominatim n'a pas répondu |
 | `data/corrections.json` | positions corrigées ou validées dans l'écran Géocodage |
 | `cache/geocode.json` | cache Nominatim (les échecs sont aussi mis en cache ; « Relancer le géocodage » les retente) |
 | `cache/matrix.json` | cache OSRM par paire de points (un point déplacé ne recalcule que ce qui manque) |
