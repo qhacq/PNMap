@@ -64,7 +64,8 @@ def fake_tiles(calls):
 def state(tmp_path):
     csv = tmp_path / "clubs.csv"
     csv.write_text(CSV, encoding="utf-8")
-    settings = Settings(clubs_csv=csv, corrections_file=tmp_path / "corrections.json", cache_dir=tmp_path / "cache")
+    settings = Settings(clubs_csv=csv, corrections_file=tmp_path / "corrections.json", cache_dir=tmp_path / "cache",
+                        communes_file=tmp_path / "communes.json")
     calls = []
     geo = Geocoder(settings.geocode_cache, "http://nominatim.test", "PNMap-test/1.0", min_interval=0,
                    client=httpx.Client(transport=fake_nominatim(calls)))
@@ -116,7 +117,7 @@ def test_review_list_and_correction(state, client):
     st = client.get("/api/state").json()
     review = {t["id"] for t in st["teams"] if t["needs_review"]}
     assert review == {2, 6}  # Colmar à vérifier, équipe 6 sans commune
-    assert not st["matrix_ready"]
+    assert st["matrix_ready"] and "SIG STRASBOURG - 2" in st["matrix_error"]  # non bloquant, mais signalé
 
     r = client.post("/api/teams/6/location", json={"address": "Troyes"})
     assert r.status_code == 200 and r.json()["geo_source"] == "adresse"
@@ -180,7 +181,6 @@ def test_optimize_with_lock_and_stability(state, client):
 
 
 def test_errors(state, client):
-    assert client.post("/api/evaluate", json={"assignment": {"1": "A"}}).status_code == 409  # pas de matrice
     ready(client, state)
     assert client.post("/api/evaluate", json={"assignment": {"99": "A"}}).status_code == 422
     r = client.post("/api/optimize", json={"pool_sizes": {"A": 4, "B": 4}}).json()
@@ -206,8 +206,10 @@ def test_osrm_used_and_cached(tmp_path):
 
 
 def test_optimal_computed_at_startup_and_persisted(state, client):
-    assert client.get("/api/optimal").json()["optimal"] is None  # pas de matrice : pas d'optimum
+    first = client.get("/api/optimal").json()["optimal"]
+    assert first is not None  # calculée dès le lancement, même avec une équipe non localisée
     ready(client, state)  # la localisation corrigée relance matrice + optimisation initiale
+    assert client.get("/api/optimal").json()["optimal"]["matrix_key"] != first["matrix_key"]
     st = client.get("/api/state").json()
     opt = st["optimal"]
     assert st["optimal_fresh"] and opt["status"] == "OPTIMAL" and opt["proven"]
@@ -233,3 +235,34 @@ def test_csv_compares_with_optimal(state, client):
     current = {t["id"]: t["current_pool"] for t in client.get("/api/state").json()["teams"]}
     csv = client.post("/api/export/assignment.csv", json={"assignment": current, "label": "Poules actuelles"}).text
     assert "poule_version_optimale" in csv and "ecart vs version optimale" in csv
+
+
+def test_unlocated_team_does_not_block(state, client):
+    # L'équipe 6 n'a pas de commune : les km des autres s'affichent quand même.
+    st = client.get("/api/state").json()
+    assert st["matrix_ready"]
+    assert "SIG STRASBOURG - 2" in st["matrix_error"]
+    m = client.get("/api/matrix").json()
+    assert all(v == 0 for v in m["km"][5])  # équipe 6 : 0 km, signalée
+    current = {t["id"]: t["current_pool"] for t in st["teams"]}
+    ev = client.post("/api/evaluate", json={"assignment": current}).json()
+    assert ev["total_km"] > 0
+
+
+def test_bundled_coordinates_used_without_network(tmp_path):
+    csv = tmp_path / "clubs.csv"
+    csv.write_text(CSV, encoding="utf-8")
+    (tmp_path / "communes.json").write_text(json.dumps({"_note": "x", "Colmar": [48.08, 7.36], "Strasbourg": [48.57, 7.75]}), encoding="utf-8")
+    settings = Settings(clubs_csv=csv, corrections_file=tmp_path / "c.json", cache_dir=tmp_path / "cache",
+                        communes_file=tmp_path / "communes.json")
+
+    def down(request):
+        raise httpx.ConnectError("hors ligne")
+    geo = Geocoder(settings.geocode_cache, "http://nominatim.test", "ua", min_interval=0,
+                   client=httpx.Client(transport=httpx.MockTransport(down)))
+    s = AppState(settings, geocoder=geo, distances=DistanceProvider(
+        settings.matrix_cache, "http://osrm.test", client=httpx.Client(transport=httpx.MockTransport(osrm_down))))
+    assert s.team(2).located and s.team(2).geo_source == "approx"  # avant tout appel réseau
+    s.start_job(optimize=False)
+    s.wait_job(10)
+    assert s.team(2).geo_source == "approx" and s.matrix is not None

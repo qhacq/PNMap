@@ -15,6 +15,7 @@ def _env(name: str, default: str) -> str:
 @dataclass
 class Settings:
     clubs_csv: Path = field(default_factory=lambda: Path(_env("PNMAP_CLUBS_CSV", str(BASE_DIR / "data" / "clubs.csv"))))
+    communes_file: Path = field(default_factory=lambda: Path(_env("PNMAP_COMMUNES", str(BASE_DIR / "data" / "communes.json"))))
     corrections_file: Path = field(default_factory=lambda: Path(_env("PNMAP_CORRECTIONS", str(BASE_DIR / "data" / "corrections.json"))))
     cache_dir: Path = field(default_factory=lambda: Path(_env("PNMAP_CACHE_DIR", str(BASE_DIR / "cache"))))
     nominatim_url: str = field(default_factory=lambda: _env("PNMAP_NOMINATIM_URL", "https://nominatim.openstreetmap.org"))

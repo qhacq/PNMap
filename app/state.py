@@ -31,6 +31,9 @@ class AppState:
         self.teams: list[Team] = load_teams(settings.clubs_csv)
         self.pools: list[str] = sorted({t.current_pool for t in self.teams if t.current_pool}) or ["A", "B", "C"]
         self.corrections: dict[str, dict] = load_json(settings.corrections_file, {})
+        # Coordonnées approximatives livrées avec l'application : affichage immédiat, même hors ligne.
+        self.seed = {k.strip().lower(): v for k, v in load_json(settings.communes_file, {}).items()
+                     if not k.startswith("_") and isinstance(v, list) and len(v) == 2}
         self.matrix: Matrix | None = None
         self.matrix_error: str | None = None
         self.matrix_key: str | None = None
@@ -66,20 +69,34 @@ class AppState:
             return True
         return False
 
+    def _locate_without_network(self, t: Team) -> None:
+        """Correction manuelle, sinon cache Nominatim, sinon coordonnées approximatives livrées."""
+        if self._apply_correction(t):
+            return
+        hit = self.geocoder.cached_commune(t.commune)
+        if hit:
+            self._set_location(t, hit, "nominatim")
+            return
+        seed = self.seed.get(t.commune.strip().lower()) if t.commune else None
+        self._set_location(t, {"lat": seed[0], "lon": seed[1], "label": f"{t.commune} (position approximative)"}
+                           if seed else None, "approx")
+
     def _apply_cached_locations(self) -> None:
-        """Applique les corrections et ce qui est déjà en cache, sans appel réseau."""
         for t in self.teams:
-            if self._apply_correction(t):
-                continue
-            self._set_location(t, self.geocoder.cached_commune(t.commune), "nominatim")
+            self._locate_without_network(t)
 
     def geocode_all(self, retry_failed: bool = False) -> None:
-        todo = [t for t in self.teams if not self._apply_correction(t)]
-        self.job.update(step="Géocodage des communes", done=0, total=len(todo))
+        """Interroge Nominatim pour les communes pas encore géocodées (les autres viennent du cache)."""
+        todo = [t for t in self.teams if not self._apply_correction(t) and t.commune
+                and (retry_failed or not self.geocoder.cached_commune(t.commune))]
+        self.job.update(step="Géocodage des communes (Nominatim)", done=0, total=len(todo))
         for t in todo:
-            loc = self.geocoder.geocode_commune(t.commune, retry_failed=retry_failed) if t.commune else None
+            loc = self.geocoder.geocode_commune(t.commune, retry_failed=retry_failed)
             with self.lock:
-                self._set_location(t, loc, "nominatim")
+                if loc:
+                    self._set_location(t, loc, "nominatim")
+                else:
+                    self._locate_without_network(t)  # garde la position approximative
             self.job["done"] += 1
 
     def save_corrections(self) -> None:
@@ -112,7 +129,7 @@ class AppState:
             self.corrections.pop(str(team_id), None)
             self.save_corrections()
             t.verified = False
-            self._set_location(t, self.geocoder.cached_commune(t.commune), "nominatim")
+            self._locate_without_network(t)
             self.matrix = None
             return t
 
@@ -122,21 +139,34 @@ class AppState:
         return all(t.located for t in self.teams)
 
     def compute_matrix(self, use_osrm: bool = True) -> Matrix | None:
-        if not self.all_located:
+        """Matrice sur les équipes localisées ; une équipe non localisée compte 0 km (signalée)."""
+        located = [i for i, t in enumerate(self.teams) if t.located]
+        if len(located) < 2:
             self.matrix = None
-            missing = [t.name for t in self.teams if not t.located]
-            self.matrix_error = f"{len(missing)} équipe(s) sans localisation : corriger dans l'onglet Géocodage."
+            self.matrix_error = "Pas assez d'équipes localisées pour calculer des distances."
             return None
-        self.job.update(step="Calcul de la matrice des distances (OSRM)", done=0, total=1)
-        coords = [(t.lat, t.lon) for t in self.teams]
-        m = self.distances.matrix(coords, use_osrm=use_osrm)
+        self.job.update(step="Calcul des distances routières (OSRM)", done=0, total=1)
+        sub = self.distances.matrix([(self.teams[i].lat, self.teams[i].lon) for i in located], use_osrm=use_osrm)
+        n = len(self.teams)
+        dist = [[0.0] * n for _ in range(n)]
+        dur = [[0.0] * n for _ in range(n)]
+        for a, i in enumerate(located):
+            for b, j in enumerate(located):
+                dist[i][j], dur[i][j] = sub.distance_m[a][b], sub.duration_s[a][b]
+        m = Matrix(dist, dur, sub.source)
         key = hashlib.sha1(json.dumps(
-            [[t.id, round(t.lat, 5), round(t.lon, 5)] for t in self.teams] + [m.source]).encode()).hexdigest()
+            [[t.id, round(t.lat, 5), round(t.lon, 5)] if t.located else [t.id] for t in self.teams]
+            + [m.source]).encode()).hexdigest()
         with self.lock:
             self.matrix = m
             self.matrix_key = key
-            self.matrix_error = (f"OSRM indisponible ({self.distances.last_error}) : repli haversine x 1,3."
-                                 if self.distances.last_error else None)
+            notes = []
+            missing = [t.name for t in self.teams if not t.located]
+            if missing:
+                notes.append(f"Sans localisation, km non comptés : {', '.join(missing)} (onglet Géocodage).")
+            if self.distances.last_error:
+                notes.append(f"OSRM indisponible ({self.distances.last_error}) : distances à vol d'oiseau x 1,3.")
+            self.matrix_error = " ".join(notes) or None
         self.job["done"] = 1
         return m
 
@@ -231,8 +261,16 @@ class AppState:
         def run() -> None:
             try:
                 if geocode:
+                    # 1) km affichés tout de suite avec les positions connues ou approximatives ;
+                    # 2) géocodage Nominatim des communes manquantes ; 3) recalcul si une position a changé.
+                    before = [(t.lat, t.lon) for t in self.teams]
+                    if self.matrix is None:
+                        self.compute_matrix(use_osrm)
                     self.geocode_all(retry_failed)
-                self.compute_matrix(use_osrm)
+                    if self.matrix is None or [(t.lat, t.lon) for t in self.teams] != before:
+                        self.compute_matrix(use_osrm)
+                else:
+                    self.compute_matrix(use_osrm)
                 if optimize and self.matrix is not None and not (self.optimal_is_fresh and self.optimal_assignment()):
                     # Version optimale calculée au lancement (ou après un changement de matrice),
                     # avec les derniers réglages utilisés.

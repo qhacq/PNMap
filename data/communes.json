@@ -1,0 +1,139 @@
+{
+ "_note": "Coordonnées approximatives des centres-communes, utilisées tant que Nominatim n'a pas répondu.",
+ "Vandoeuvre-lès-Nancy": [
+  48.656,
+  6.177
+ ],
+ "Joeuf": [
+  49.231,
+  6.012
+ ],
+ "Hattmatt": [
+  48.788,
+  7.426
+ ],
+ "Golbey": [
+  48.196,
+  6.437
+ ],
+ "Sainte-Marie-aux-Chênes": [
+  49.194,
+  6.0
+ ],
+ "Sarrebourg": [
+  48.735,
+  7.054
+ ],
+ "Nancy": [
+  48.692,
+  6.184
+ ],
+ "Longwy": [
+  49.519,
+  5.766
+ ],
+ "Le Val-d'Ajol": [
+  47.924,
+  6.483
+ ],
+ "Ludres": [
+  48.62,
+  6.165
+ ],
+ "Kaysersberg": [
+  48.139,
+  7.263
+ ],
+ "Nilvange": [
+  49.343,
+  6.051
+ ],
+ "Metz": [
+  49.119,
+  6.176
+ ],
+ "Cormontreuil": [
+  49.217,
+  4.052
+ ],
+ "Bétheny": [
+  49.285,
+  4.054
+ ],
+ "Reims": [
+  49.258,
+  4.032
+ ],
+ "Charleville-Mézières": [
+  49.762,
+  4.726
+ ],
+ "Muizon": [
+  49.274,
+  3.889
+ ],
+ "Villers-lès-Nancy": [
+  48.673,
+  6.153
+ ],
+ "Recy": [
+  48.987,
+  4.315
+ ],
+ "Troyes": [
+  48.297,
+  4.074
+ ],
+ "Châlons-en-Champagne": [
+  48.957,
+  4.363
+ ],
+ "Witry-lès-Reims": [
+  49.291,
+  4.12
+ ],
+ "Furdenheim": [
+  48.611,
+  7.561
+ ],
+ "Schiltigheim": [
+  48.606,
+  7.75
+ ],
+ "Holtzheim": [
+  48.556,
+  7.64
+ ],
+ "Souffelweyersheim": [
+  48.636,
+  7.742
+ ],
+ "Strasbourg": [
+  48.573,
+  7.752
+ ],
+ "Geispolsheim": [
+  48.515,
+  7.644
+ ],
+ "Dessenheim": [
+  47.977,
+  7.488
+ ],
+ "Illkirch-Graffenstaden": [
+  48.53,
+  7.715
+ ],
+ "Rosheim": [
+  48.496,
+  7.471
+ ],
+ "Weitbruch": [
+  48.756,
+  7.776
+ ],
+ "Gries": [
+  48.752,
+  7.814
+ ]
+}

@@ -22,9 +22,15 @@ Alternatives si les dépendances sont déjà installées (`pip install -r requir
 Le script crée un environnement virtuel `.venv`, installe les dépendances (Python 3.10 ou plus),
 démarre le serveur et ouvre <http://127.0.0.1:8000/>.
 
-Au premier lancement, l'application géocode les communes (environ 40 s, une requête par seconde),
-puis calcule la matrice des distances. La progression s'affiche en haut à droite. Les lancements
-suivants sont instantanés grâce aux caches.
+Les kilomètres s'affichent dès l'ouverture : l'application part des positions approximatives des
+communes livrées dans `data/communes.json`, puis les affine en arrière-plan avec Nominatim (environ 40 s
+au premier lancement, une requête par seconde) et calcule la version optimale. La progression s'affiche
+en haut à droite. Une équipe sans commune (BASKET NORD SUNDGAU dans le fichier fourni) ne bloque rien :
+elle est signalée et compte 0 km tant qu'on n'a pas indiqué sa salle dans l'onglet Géocodage.
+
+L'écran principal reste simple : choix de la répartition affichée (poules actuelles, version optimale,
+Ma version), km total et km par poule, carte, puis les trois poules avec les km de chaque équipe.
+Le reste est rangé dans « Outils avancés ».
 
 ## Utilisation
 

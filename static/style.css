@@ -27,7 +27,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .buttons { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
 input[type=number], input[type=text], select { font: inherit; padding: 4px 6px; border: 1px solid var(--border); border-radius: 5px; }
 
-.top { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 12px; }
 .map-wrap { position: relative; }
 #map { height: 640px; border-radius: 8px; border: 1px solid var(--border); }
 .side { max-height: 640px; overflow-y: auto; }
@@ -183,3 +182,24 @@ table.mini td:first-child { white-space: normal; }
   .map-ctrl { position: static; max-width: none; margin-top: 6px; }
 }
 table.compare tr.small td { white-space: normal; font-size: 12px; color: var(--muted); }
+
+/* --- écran simplifié --- */
+.summary { padding: 12px 14px; }
+.summary-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.summary-top .seg button { font-size: 14px; padding: 7px 14px; }
+.sum-grid { display: grid; grid-template-columns: 1.2fr repeat(3, 1fr); gap: 10px; }
+.sum-total, .sum-pool { background: var(--bg); border-radius: 8px; padding: 8px 12px; }
+.sum-total .v { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sum-pool .v { font-size: 22px; font-weight: 700; display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.sum-total .l, .sum-pool .l { font-size: 12px; color: var(--muted); }
+.sum-line { margin: 8px 0 0; font-size: 14px; }
+.big-wait { font-size: 18px; margin: 6px 0; }
+.warn-line { background: #fef3c7; color: #78350f; padding: 6px 10px; border-radius: 6px; font-size: 13px; margin: 8px 0 0; }
+#map { height: 480px; }
+.map-wrap { margin-bottom: 8px; }
+.advanced { margin-top: 14px; }
+.advanced > summary { cursor: pointer; font-weight: 600; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; }
+.adv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.exports { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.exports h2 { margin: 0 8px 0 0; }
+@media (max-width: 1100px) { .sum-grid, .adv-grid { grid-template-columns: 1fr 1fr; } }

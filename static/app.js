@@ -288,7 +288,7 @@ function renderMap() {
     }
     bounds.push(ll);
   }
-  if (!fitted && bounds.length) { map.fitBounds(bounds, { padding: [20, 20] }); fitted = true; }
+  if (!fitted && bounds.length) { map.invalidateSize(); map.fitBounds(bounds, { padding: [30, 30] }); fitted = true; }
   renderLinks(A);
   renderRoutes(A);
   $("#legend").innerHTML = S.pools.map(p => `<span>${shapeSvg(p, 14)} Poule ${esc(p)}${M ? ` · ${fmt(M.pools[p].km)} km` : ""}</span>`).join("")
@@ -621,7 +621,40 @@ function renderCompare() {
     </tbody></table>`;
 }
 
+function renderSummary() {
+  const box = $("#summary");
+  const A = S.V[S.view];
+  const M = metricsOf(A);
+  $$(".mine-only").forEach(e => e.classList.toggle("hidden", S.view !== "mine"));
+  const missing = S.teams.filter(t => !t.located);
+  const warn = missing.length ? `<p class="warn-line">⚠ ${missing.length} équipe(s) sans localisation, km non comptés :
+    ${missing.map(t => esc(t.name)).join(", ")}. <a href="#" data-goto-geo>Indiquer la commune ou la salle</a></p>` : "";
+  if (!M) {
+    box.innerHTML = `<p class="big-wait">${S.jobRunning ? "⏳ Calcul des distances en cours…" :
+      esc(S.matrixError || "Distances pas encore calculées.")}</p>${warn}`;
+  } else {
+    const O = metricsOf(S.V.optimal), C = metricsOf(S.V.current);
+    const vs = [S.view !== "current" && C ? `vs poules actuelles : ${delta(M.total, C.total)}` : "",
+      S.view !== "optimal" && O ? `vs version optimale : ${delta(M.total, O.total)}` : "",
+      S.view === "optimal" ? (S.optimalInfo ? (S.optimalInfo.proven ? `<span class="tag ok">✔ optimale prouvée</span>`
+        : `<span class="tag warn">meilleure trouvée</span>`) : "") : "",
+      S.view !== "optimal" && !O ? `<span class="muted">version optimale : ${S.jobRunning ? "calcul en cours…" : "non calculée"}</span>` : "",
+    ].filter(Boolean).join(" · ");
+    box.innerHTML = `<div class="sum-grid">
+      <div class="sum-total"><div class="v">${fmt(M.total)} km</div>
+        <div class="l">au total sur la saison (${esc(VERSION_NAMES[S.view])})</div></div>
+      ${S.pools.map(p => `<div class="sum-pool"><div class="v">${shapeSvg(p, 16)} ${fmt(M.pools[p].km)} km</div>
+        <div class="l">Poule ${esc(p)} · ${M.pools[p].size} équipes · ${fmt(M.pools[p].avg)} km par équipe</div></div>`).join("")}
+    </div>
+    <p class="sum-line">${vs}</p>
+    <p class="hint">Chaque équipe reçoit puis se déplace une fois chez chacune des autres équipes de sa poule :
+      les km d'une équipe sont la somme de ses allers-retours, ceux d'une poule la somme de ses équipes.</p>${warn}`;
+  }
+  $$("[data-goto-geo]", box).forEach(a => a.addEventListener("click", e => { e.preventDefault(); $(".tab[data-tab=geocodage]").click(); }));
+}
+
 function renderAll() {
+  renderSummary();
   renderVersions();
   renderMap();
   renderPools();
@@ -925,6 +958,7 @@ async function pollStatus() {
 }
 
 function renderStatus(st) {
+  S.matrixError = st.matrix_error;
   const el = $("#status");
   const j = st.job;
   if (j.running) {

@@ -22,47 +22,34 @@
 <main>
 <!-- ============================ RÉPARTITION ============================ -->
 <section id="tab-repartition" class="tab-panel active">
-  <div id="versions" class="versions"></div>
-
-  <div class="top">
-    <div class="map-wrap">
-      <div id="map"></div>
-      <div class="map-ctrl">
-        <div class="seg" id="view-seg" role="radiogroup" aria-label="Version affichée">
-          <button data-view="current">Poules actuelles</button>
-          <button data-view="optimal">Version optimale</button>
-          <button data-view="mine">Ma version</button>
-        </div>
-        <label>Liaisons
-          <select id="link-mode">
-            <option value="none">aucune</option>
-            <option value="hull">enveloppe convexe</option>
-            <option value="star">étoile (barycentre)</option>
-          </select>
-        </label>
-        <label><input type="checkbox" id="show-labels" checked> Noms</label>
+  <div class="summary card">
+    <div class="summary-top">
+      <div class="seg" id="view-seg" role="radiogroup" aria-label="Répartition affichée">
+        <button data-view="current">Poules actuelles</button>
+        <button data-view="optimal">Version optimale</button>
+        <button data-view="mine">Ma version</button>
       </div>
-      <div id="legend" class="legend"></div>
+      <span class="buttons mine-only">
+        <button id="btn-undo" title="Annuler (Ctrl+Z)">↶ Annuler</button>
+        <button id="btn-redo" title="Rétablir (Ctrl+Y)">↷ Rétablir</button>
+      </span>
     </div>
-    <aside class="side">
-      <div class="card">
-        <h2>Impact de Ma version</h2>
-        <div id="impact"></div>
-      </div>
-      <div class="card">
-        <h2>Historique</h2>
-        <div class="buttons">
-          <button id="btn-undo" title="Annuler (Ctrl+Z)">↶ Annuler</button>
-          <button id="btn-redo" title="Rétablir (Ctrl+Y)">↷ Rétablir</button>
-        </div>
-        <ol id="history" class="history"></ol>
-      </div>
-    </aside>
+    <div id="summary"></div>
   </div>
 
-  <div class="card">
-    <h2>Meilleurs échanges possibles depuis Ma version</h2>
-    <div id="best-swaps"></div>
+  <div class="map-wrap">
+    <div id="map"></div>
+    <div class="map-ctrl">
+      <label>Liaisons
+        <select id="link-mode">
+          <option value="none">aucune</option>
+          <option value="hull">enveloppe convexe</option>
+          <option value="star">étoile (barycentre)</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="show-labels" checked> Noms</label>
+    </div>
+    <div id="legend" class="legend"></div>
   </div>
 
   <div class="pool-toolbar">
@@ -71,12 +58,16 @@
   </div>
   <div id="pools" class="pools"></div>
 
-  <div class="card compare-card">
-    <h2>Comparatif des trois versions</h2>
-    <div id="compare"></div>
-  </div>
-
-  <div class="bottom">
+  <details class="advanced" id="advanced">
+    <summary>Outils avancés : comparatif détaillé, impact, historique, meilleurs échanges, optimisation, exports</summary>
+    <div id="versions" class="versions"></div>
+    <div class="adv-grid">
+      <div class="card"><h2>Impact de Ma version</h2><div id="impact"></div></div>
+      <div class="card"><h2>Historique de Ma version</h2><ol id="history" class="history"></ol></div>
+    </div>
+    <div class="card"><h2>Meilleurs échanges possibles depuis Ma version</h2><div id="best-swaps"></div></div>
+    <div class="card compare-card"><h2>Comparatif des trois versions</h2><div id="compare"></div></div>
+    <div class="adv-grid">
     <div class="card">
       <h2>Optimisation</h2>
       <div class="form-grid">
@@ -118,21 +109,23 @@
         <button id="btn-add-pair">Ajouter</button>
       </div>
       <ul id="pairs" class="pairs"></ul>
-      <h2 style="margin-top:14px">Exports</h2>
-      <label>Version
-        <select id="export-version">
-          <option value="mine">Ma version</option>
-          <option value="optimal">Version optimale</option>
-          <option value="current">Poules actuelles</option>
-        </select>
-      </label>
-      <div class="buttons">
-        <button data-export="assignment.csv">Répartition CSV</button>
-        <button data-export="report.pdf">Rapport PDF (carte, comparatif)</button>
-        <button data-export="matrix.csv" data-kind="distance">Matrice km CSV</button>
-        <button data-export="matrix.csv" data-kind="duration">Matrice minutes CSV</button>
-      </div>
     </div>
+    </div>
+  </details>
+
+  <div class="card exports">
+    <h2>Exports</h2>
+    <label>Version
+      <select id="export-version">
+        <option value="mine">Ma version</option>
+        <option value="optimal">Version optimale</option>
+        <option value="current">Poules actuelles</option>
+      </select>
+    </label>
+    <button data-export="assignment.csv">Répartition CSV</button>
+    <button data-export="report.pdf">Rapport PDF (carte, comparatif)</button>
+    <button data-export="matrix.csv" data-kind="distance">Matrice km CSV</button>
+    <button data-export="matrix.csv" data-kind="duration">Matrice minutes CSV</button>
   </div>
 </section>
 
