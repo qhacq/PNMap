@@ -267,3 +267,7 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
 def build() -> FastAPI:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     return create_app()
+
+
+# Instance de niveau module : `uvicorn app.main:app` ou `fastapi run app/main.py`.
+app = build()

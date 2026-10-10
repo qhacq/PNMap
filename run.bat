@@ -8,4 +8,4 @@ if not exist .venv (
 call .venv\Scripts\activate.bat
 pip install -q --disable-pip-version-check -r requirements.txt
 start "" http://127.0.0.1:%PORT%/
-uvicorn app.main:build --factory --host 127.0.0.1 --port %PORT%
+uvicorn app.main:app --host 127.0.0.1 --port %PORT%

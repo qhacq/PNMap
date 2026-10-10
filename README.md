@@ -16,6 +16,9 @@ chacune des 11 autres équipes de sa poule).
 run.bat           # Windows
 ```
 
+Alternatives si les dépendances sont déjà installées (`pip install -r requirements.txt`) :
+`uvicorn app.main:app --port 8000` ou `fastapi run app/main.py`.
+
 Le script crée un environnement virtuel `.venv`, installe les dépendances (Python 3.10 ou plus),
 démarre le serveur et ouvre <http://127.0.0.1:8000/>.
 

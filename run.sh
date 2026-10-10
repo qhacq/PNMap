@@ -9,4 +9,4 @@ fi
 . .venv/bin/activate
 pip install -q --disable-pip-version-check -r requirements.txt
 ( sleep 2; python -m webbrowser "http://127.0.0.1:${PORT}/" >/dev/null 2>&1 || true ) &
-exec uvicorn app.main:build --factory --host 127.0.0.1 --port "${PORT}"
+exec uvicorn app.main:app --host 127.0.0.1 --port "${PORT}"
