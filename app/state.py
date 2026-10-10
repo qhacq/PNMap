@@ -30,7 +30,10 @@ class AppState:
         self.tiles = tiles or TileFetcher(settings.tiles_dir, settings.tile_url, settings.user_agent)
         self.teams: list[Team] = load_teams(settings.clubs_csv)
         self.pools: list[str] = sorted({t.current_pool for t in self.teams if t.current_pool}) or ["A", "B", "C"]
-        self.corrections: dict[str, dict] = load_json(settings.corrections_file, {})
+        self.corrections: dict[str, dict] = load_json(settings.corrections_file, None)
+        if self.corrections is None:  # serverless : corrections livrées dans le dépôt, en lecture seule
+            from .config import BASE_DIR
+            self.corrections = load_json(BASE_DIR / "data" / "corrections.json", {})
         # Coordonnées approximatives livrées avec l'application : affichage immédiat, même hors ligne.
         self.seed = {k.strip().lower(): v for k, v in load_json(settings.communes_file, {}).items()
                      if not k.startswith("_") and isinstance(v, list) and len(v) == 2}
@@ -179,6 +182,21 @@ class AppState:
         self.job["done"] = 1
         return m
 
+    def ensure_matrix(self) -> None:
+        """Serverless : pas de tâche de fond, la matrice est calculée pendant la requête
+        (positions connues ou approximatives + un seul appel OSRM), puis gardée en mémoire."""
+        if self.matrix is None and not self.job["running"]:
+            with self.lock:
+                if self.matrix is None:
+                    # Seules les équipes absentes des positions livrées interrogent Nominatim.
+                    for t in [t for t in self.teams if not t.located and (t.commune or t.adresse)][:15]:
+                        loc = self.geocoder.geocode_address(t.adresse) if t.adresse else None
+                        loc = loc or (self.geocoder.geocode_commune(t.commune) if t.commune else None)
+                        if loc:
+                            self._set_location(t, loc, "adresse" if t.adresse else "nominatim")
+                    self.compute_matrix()
+                    self.job.update(step="", done=0, total=0)
+
     # -- tâche de fond -----------------------------------------------------
     # -- optimisation ------------------------------------------------------
     def default_pool_sizes(self) -> dict[str, int]:
@@ -225,7 +243,7 @@ class AppState:
             current=current,
             stability_penalty=round(max(0.0, float(req.get("stability_weight") or 0)) * unit),
             fairness=float(req.get("fairness") or 0.0),
-            time_limit=float(req.get("time_limit") or self.settings.default_time_limit),
+            time_limit=min(float(req.get("time_limit") or self.settings.default_time_limit), self.settings.max_time_limit),
             workers=self.settings.solver_workers,
             hint=hint,
         )
@@ -310,6 +328,12 @@ class AppState:
                 self.job.update(running=False, step="")
 
         self.job.update(running=True, error=None)
+        if self.settings.serverless:
+            # Pas de fil d'exécution durable : tout se fait pendant la requête. L'optimisation
+            # (longue) est lancée par la page elle-même, via /api/optimize.
+            optimize = False
+            run()
+            return True
         self._thread = threading.Thread(target=run, daemon=True)
         self._thread.start()
         return True

@@ -275,3 +275,30 @@ def test_index_busts_browser_cache(client):
     assert r.headers["cache-control"] == "no-store"
     assert f"/static/app.js?v={__version__}-" in r.text and "__VERSION__" not in r.text
     assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
+
+
+def test_serverless_mode(tmp_path):
+    """Vercel : pas de tâche de fond ; la matrice est calculée pendant la requête,
+    l'optimisation est demandée par la page."""
+    csv = tmp_path / "clubs.csv"
+    csv.write_text(CSV, encoding="utf-8")
+    settings = Settings(clubs_csv=csv, corrections_file=tmp_path / "c.json", cache_dir=tmp_path / "cache",
+                        communes_file=tmp_path / "communes.json", serverless=True)
+    calls = []
+    geo = Geocoder(settings.geocode_cache, "http://nominatim.test", "ua", min_interval=0,
+                   client=httpx.Client(transport=fake_nominatim(calls)))
+    dist = DistanceProvider(settings.matrix_cache, "http://osrm.test", client=httpx.Client(transport=httpx.MockTransport(osrm_down)))
+    s = AppState(settings, geocoder=geo, distances=dist)
+    with TestClient(create_app(s)) as c:  # autostart : ignoré en serverless
+        assert s._thread is None and not calls
+        st = c.get("/api/state").json()
+        assert st["serverless"] and st["matrix_ready"] and st["optimal"] is None
+        r = c.post("/api/optimize", json={"pool_sizes": {"A": 3, "B": 3}}).json()
+        assert r["status"] in ("OPTIMAL", "FEASIBLE")
+        # export avec la version optimale fournie par le navigateur
+        current = {t["id"]: t["current_pool"] for t in st["teams"]}
+        csv_text = c.post("/api/export/assignment.csv", json={"assignment": current, "optimal": r["assignment"]}).text
+        assert "ecart vs version optimale" in csv_text
+        # correction : traitée pendant la requête, sans fil d'exécution
+        c.post("/api/teams/6/location", json={"lat": 48.3, "lon": 4.08})
+        assert s._thread is None and s.team(6).located

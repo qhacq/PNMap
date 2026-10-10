@@ -34,7 +34,7 @@ class OptimizeIn(BaseModel):
     separate_clubs: bool = True
     stability_weight: float = 0.0  # km (ou minutes) de pénalité par équipe qui change de poule
     fairness: float = Field(0.0, ge=0.0, le=1.0)
-    time_limit: float = Field(30.0, gt=0, le=3600)
+    time_limit: float | None = Field(None, gt=0, le=3600)
     hint: dict[int, str] | None = None
 
 
@@ -46,6 +46,7 @@ class LocationIn(BaseModel):
 
 class ExportIn(AssignmentIn):
     label: str = "Ma version"
+    optimal: dict[int, str] | None = None  # version optimale gardée par le navigateur (serverless)
     kind: Literal["distance", "duration"] = "distance"
 
 
@@ -54,7 +55,7 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if autostart:
+        if autostart and not app.state.pn.settings.serverless:
             app.state.pn.start_job()
         yield
 
@@ -62,7 +63,10 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
     app.state.pn = state or AppState(settings)
 
     def st() -> AppState:
-        return app.state.pn
+        s = app.state.pn
+        if s.settings.serverless:
+            s.ensure_matrix()
+        return s
 
     def require_matrix():
         s = st()
@@ -90,6 +94,7 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
             "pools": s.pools,
             "default_pool_sizes": s.default_pool_sizes(),
             "default_time_limit": settings.default_time_limit,
+            "serverless": s.settings.serverless,
             "optimal": s.optimal,
             "optimal_fresh": s.optimal_is_fresh,
             "matrix_key": s.matrix_key,
@@ -203,7 +208,7 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
         m = require_matrix()
         s = st()
         metrics = evaluate(s.teams, m, check_assignment(body.assignment), s.pools)
-        opt_a = s.optimal_assignment()
+        opt_a = check_assignment(body.optimal) if body.optimal else s.optimal_assignment()
         optimal = evaluate(s.teams, m, opt_a, s.pools) if opt_a else None
         current = evaluate(s.teams, m, {t.id: t.current_pool for t in s.teams}, s.pools)
         return s, m, metrics, optimal, current

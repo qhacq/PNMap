@@ -36,6 +36,25 @@ d'équipes (distance et km des deux rencontres). Viennent ensuite la carte et le
 les km de chaque équipe.
 Le reste est rangé dans « Outils avancés ».
 
+## Déploiement sur Vercel
+
+L'application fonctionne aussi sur Vercel (projet relié au dépôt GitHub). Elle détecte
+automatiquement l'environnement serverless et s'y adapte :
+
+- le code est en lecture seule : les caches vont dans `/tmp/pnmap` (temporaire) ;
+- aucune tâche de fond : à l'ouverture, les positions viennent de `data/communes.json` et des
+  adresses du CSV, et les distances routières sont demandées à OSRM pendant la requête
+  (quelques secondes, puis gardées en mémoire tant que l'instance vit) ;
+- la version optimale est demandée par la page elle-même (20 s par défaut) ; la page reste
+  utilisable pendant le calcul ;
+- Ma version, l'historique, les verrous et la dernière version optimale sont enregistrés dans
+  le navigateur (localStorage), pas sur le serveur ;
+- `vercel.json` autorise 60 s par requête pour laisser le temps au calcul.
+
+Sur Vercel, les corrections faites dans l'onglet Géocodage ne sont pas conservées d'une instance
+à l'autre : pour une correction durable, renseigner `commune_geocodage` ou `adresse_salle` dans
+`data/clubs.csv`.
+
 ## Utilisation
 
 ### Onglet Répartition

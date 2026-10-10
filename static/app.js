@@ -5,6 +5,11 @@ const POOL_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#00
 const POOL_SHAPES = ["circle", "square", "triangle", "diamond", "circle", "square"];
 const VERSION_NAMES = { current: "Poules actuelles", optimal: "Version optimale", mine: "Ma version" };
 const HISTORY_MAX = 200;
+const LS_UI = "pnmap-ui", LS_OPT = "pnmap-optimal";
+
+function readLocal(key) {
+  try { return JSON.parse(localStorage.getItem(key) || "null"); } catch (_) { return null; }
+}
 
 const S = {
   teams: [], pools: [], byId: {}, idx: {},
@@ -82,14 +87,14 @@ let saveTimer = null;
 function saveUi() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    api("/api/ui-state", {
-      method: "PUT",
-      body: {
-        mine: S.V.mine, history: S.history.slice(-HISTORY_MAX), hpos: Math.min(S.hpos, HISTORY_MAX),
-        lastChange: S.lastChange, locks: [...S.locks], pairs: S.pairs, settings: readSettings(),
-        view: S.view, linkMode: S.linkMode, labels: $("#show-labels").checked,
-      },
-    }).catch(() => {});
+    const body = {
+      mine: S.V.mine, history: S.history.slice(-HISTORY_MAX), hpos: Math.min(S.hpos, HISTORY_MAX),
+      lastChange: S.lastChange, locks: [...S.locks], pairs: S.pairs, settings: readSettings(),
+      view: S.view, linkMode: S.linkMode, labels: $("#show-labels").checked,
+    };
+    // Sauvegarde dans le navigateur (fonctionne aussi sur Vercel, où le serveur ne garde rien).
+    try { localStorage.setItem(LS_UI, JSON.stringify(body)); } catch (_) { /* stockage indisponible */ }
+    if (!S.serverless) api("/api/ui-state", { method: "PUT", body }).catch(() => {});
   }, 400);
 }
 
@@ -354,7 +359,7 @@ function selectTeam(id) {
 function setView(v) {
   if (!S.V[v]) {
     S.notice = v === "optimal"
-      ? (S.jobRunning ? "La version optimale est en cours de calcul : elle sera cliquable dans quelques secondes."
+      ? (S.jobRunning || S.optimizing ? "La version optimale est en cours de calcul : elle sera cliquable dans quelques secondes."
         : "La version optimale n'est pas encore calculée : ouvrir « Outils avancés » puis « Optimiser ».")
       : `${VERSION_NAMES[v]} indisponible.`;
     renderSummary();
@@ -637,7 +642,7 @@ function renderSummary() {
   $$("#view-seg button").forEach(b => {
     const pending = !S.V[b.dataset.view];
     b.classList.toggle("pending", pending);
-    b.textContent = VERSION_NAMES[b.dataset.view] + (pending && b.dataset.view === "optimal" ? (S.jobRunning ? " (calcul…)" : " (non calculée)") : "");
+    b.textContent = VERSION_NAMES[b.dataset.view] + (pending && b.dataset.view === "optimal" ? (S.jobRunning || S.optimizing ? " (calcul…)" : " (non calculée)") : "");
     b.setAttribute("aria-checked", String(b.dataset.view === S.view));
   });
   const missing = S.teams.filter(t => !t.located);
@@ -652,7 +657,7 @@ function renderSummary() {
       esc(S.matrixError || "Distances pas encore calculées.")}</p>${notice}${warn}`;
   } else {
     const cell = (v, val, ref) => {
-      if (!M[v]) return `<td class="na">${v === "optimal" && S.jobRunning ? "calcul…" : "-"}</td>`;
+      if (!M[v]) return `<td class="na">${v === "optimal" && (S.jobRunning || S.optimizing) ? "calcul…" : "-"}</td>`;
       const d = ref != null && v !== "current" ? `<small>${delta(val, ref)}</small>` : "";
       return `<td class="${v === S.view ? "shown" : ""}"><b>${fmt(val)}</b> km${d}</td>`;
     };
@@ -793,35 +798,49 @@ function applyOptimal(o) {
   S.V.optimal = o ? toIntKeys(o.assignment) : null;
 }
 
-async function optimize() {
+async function optimize(auto = false) {
+  if (S.optimizing) return;
   const s = readSettings();
   const locks = {};
   for (const id of S.locks) locks[id] = S.V.mine[id];
-  const body = {
+  const body = auto ? { pool_sizes: s.pool_sizes, hint: S.V.current } : {
     ...s, locks,
     forbidden_pairs: S.pairs.filter(p => p.type === "forbidden").map(p => [p.a, p.b]),
     imposed_pairs: S.pairs.filter(p => p.type === "imposed").map(p => [p.a, p.b]),
     hint: S.V.mine,
   };
+  const limit = auto ? S.defaultTimeLimit : s.time_limit;
   const t0 = Date.now();
-  const tick = () => busy(`Optimisation CP-SAT en cours… ${Math.round((Date.now() - t0) / 1000)} s / ${s.time_limit} s`);
-  tick();
-  const timer = setInterval(tick, 250);
+  const tick = () => busy(`Recherche de la répartition avec le moins de km… ${Math.round((Date.now() - t0) / 1000)} s / ${limit} s`);
+  let timer = null;
+  S.optimizing = true;
+  if (auto) {
+    renderSummary();  // le bouton « Version optimale » affiche « (calcul…) » ; la page reste utilisable
+  } else {
+    tick();
+    timer = setInterval(tick, 250);
+  }
   try {
     const r = await api("/api/optimize", { method: "POST", body });
     if (!r.assignment) { setMessage(`${r.status} : ${r.message}`, "err"); return; }
     applyOptimal(r.optimal);
     S.optimalFresh = true;
-    const gap = r.status !== "OPTIMAL" ? ` Écart à la borne : ${fmt(r.gap * 100, 1)} %.` : "";
-    setMessage(`${r.message} ${fmt(r.optimal.total_km)} km cumulés en ${fmt(r.wall_time, 1)} s.${gap} ` +
-      `Version optimale mise à jour${S.locks.size ? ` (${S.locks.size} équipe(s) verrouillée(s))` : ""}.`, "ok");
-    setView("optimal");
-    renderAll();
+    try { localStorage.setItem(LS_OPT, JSON.stringify(r.optimal)); } catch (_) { /* stockage indisponible */ }
+    if (auto) {
+      toast(`Version optimale prête : ${fmt(r.optimal.total_km)} km au total.`, "ok");
+    } else {
+      const gap = r.status !== "OPTIMAL" ? ` Écart à la borne : ${fmt(r.gap * 100, 1)} %.` : "";
+      setMessage(`${r.message} ${fmt(r.optimal.total_km)} km cumulés en ${fmt(r.wall_time, 1)} s.${gap} ` +
+        `Version optimale mise à jour${S.locks.size ? ` (${S.locks.size} équipe(s) verrouillée(s))` : ""}.`, "ok");
+      setView("optimal");
+    }
   } catch (e) {
-    setMessage(e.message, "err");
+    setMessage(`Calcul de la version optimale impossible : ${e.message}`, "err");
   } finally {
-    clearInterval(timer);
+    S.optimizing = false;
+    if (timer) clearInterval(timer);
     busy(null);
+    renderAll();
   }
 }
 
@@ -851,7 +870,7 @@ async function doExport(btn) {
   try {
     const res = await api(`/api/export/${btn.dataset.export}`, {
       method: "POST", raw: true,
-      body: { assignment: A, label: VERSION_NAMES[v], kind: btn.dataset.kind || "distance" },
+      body: { assignment: A, label: VERSION_NAMES[v], kind: btn.dataset.kind || "distance", optimal: S.V.optimal },
     });
     const blob = await res.blob();
     const fname = (res.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/)?.[1] || btn.dataset.export;
@@ -1059,8 +1078,15 @@ async function loadState() {
   S.byId = Object.fromEntries(st.teams.map(t => [t.id, t]));
   S.matrixReady = st.matrix_ready;
   S.jobRunning = st.job.running;
+  S.serverless = st.serverless;
   S.optimalFresh = st.optimal_fresh;
-  applyOptimal(st.optimal);
+  const local = readLocal(LS_OPT);
+  if (!(st.optimal && st.optimal_fresh) && local && local.matrix_key && local.matrix_key === st.matrix_key) {
+    applyOptimal(local);  // optimum calculé précédemment dans ce navigateur pour les mêmes distances
+    S.optimalFresh = true;
+  } else {
+    applyOptimal(st.optimal);
+  }
   renderStatus({ job: st.job, matrix_ready: st.matrix_ready, matrix_source: st.matrix_source, matrix_error: st.matrix_error });
   renderGeo();
   return st;
@@ -1079,6 +1105,11 @@ async function reloadData() {
   if (!S.V[S.view]) S.view = "mine";
   setView(S.view);
   renderAll();
+  // Sur Vercel, aucun calcul ne tourne en arrière-plan : la page demande elle-même la version optimale.
+  if (S.serverless && S.matrixReady && !S.V.optimal && !S.autoOptTried) {
+    S.autoOptTried = true;
+    optimize(true);
+  }
 }
 
 async function init() {
@@ -1087,7 +1118,8 @@ async function init() {
   S.defaultSizes = st.default_pool_sizes;
   S.V.current = Object.fromEntries(st.teams.map(t => [t.id, t.current_pool]));
   $("#time-limit").value = st.default_time_limit;
-  const ui = await api("/api/ui-state").catch(() => ({}));
+  S.defaultTimeLimit = st.default_time_limit;
+  const ui = readLocal(LS_UI) || await api("/api/ui-state").catch(() => ({})) || {};
   const known = new Set(st.teams.map(t => t.id));
   const valid = (A) => A && Object.keys(A).length === known.size &&
     Object.entries(A).every(([k, v]) => known.has(Number(k)) && S.pools.includes(v));
@@ -1130,7 +1162,7 @@ $$(".tab").forEach(b => b.addEventListener("click", () => {
 $$("#view-seg button").forEach(b => b.addEventListener("click", () => { setView(b.dataset.view); renderAll(); }));
 $("#link-mode").addEventListener("change", e => { S.linkMode = e.target.value; renderMap(); saveUi(); });
 $("#show-labels").addEventListener("change", () => { renderMap(); saveUi(); });
-$("#btn-optimize").addEventListener("click", optimize);
+$("#btn-optimize").addEventListener("click", () => optimize(false));
 $("#btn-undo").addEventListener("click", undo);
 $("#btn-redo").addEventListener("click", redo);
 document.addEventListener("keydown", e => {
