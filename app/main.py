@@ -13,8 +13,7 @@ from pydantic import BaseModel, Field
 
 from . import exports
 from .config import Settings
-from .metrics import evaluate, integer_costs
-from .optimizer import OptimizeParams, solve
+from .metrics import evaluate
 from .state import AppState
 from .storage import load_json, save_json
 
@@ -46,7 +45,7 @@ class LocationIn(BaseModel):
 
 
 class ExportIn(AssignmentIn):
-    reference: dict[int, str] | None = None
+    label: str = "Ma version"
     kind: Literal["distance", "duration"] = "distance"
 
 
@@ -89,8 +88,10 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
         return {
             "teams": [t.to_dict() for t in s.teams],
             "pools": s.pools,
-            "default_pool_size": settings.default_pool_size,
+            "default_pool_sizes": s.default_pool_sizes(),
             "default_time_limit": settings.default_time_limit,
+            "optimal": s.optimal,
+            "optimal_fresh": s.optimal_is_fresh,
             "matrix_ready": s.matrix is not None,
             "matrix_source": s.matrix.source if s.matrix else None,
             "matrix_error": s.matrix_error,
@@ -100,7 +101,7 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
     @app.get("/api/status")
     def get_status():
         s = st()
-        return {"job": s.job, "matrix_ready": s.matrix is not None,
+        return {"job": s.job, "matrix_ready": s.matrix is not None, "optimal_fresh": s.optimal_is_fresh,
                 "matrix_source": s.matrix.source if s.matrix else None, "matrix_error": s.matrix_error}
 
     @app.get("/api/ui-state")
@@ -169,8 +170,8 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
         m = require_matrix()
         s = st()
         return {"ids": [t.id for t in s.teams], "source": m.source,
-                "km": [[round(v / 1000, 1) for v in row] for row in m.distance_m],
-                "minutes": [[round(v / 60) for v in row] for row in m.duration_s]}
+                "km": [[round(v / 1000, 3) for v in row] for row in m.distance_m],
+                "minutes": [[round(v / 60, 1) for v in row] for row in m.duration_s]}
 
     @app.post("/api/evaluate")
     def post_evaluate(body: AssignmentIn):
@@ -180,66 +181,36 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
 
     @app.post("/api/optimize")
     def post_optimize(body: OptimizeIn):
-        m = require_matrix()
-        s = st()
-        pools = s.pools
-        pidx = {p: k for k, p in enumerate(pools)}
-        tidx = {t.id: i for i, t in enumerate(s.teams)}
-        sizes = body.pool_sizes or {p: settings.default_pool_size for p in pools}
-        if set(sizes) != set(pools):
-            raise HTTPException(422, f"Tailles attendues pour les poules {pools}")
-
-        def pairs(lst):
-            try:
-                return [(tidx[a], tidx[b]) for a, b in lst]
-            except KeyError as exc:
-                raise HTTPException(422, f"Équipe inconnue : {exc}")
-
-        try:
-            locks = {tidx[t]: pidx[p] for t, p in body.locks.items()}
-        except KeyError as exc:
-            raise HTTPException(422, f"Verrou invalide : {exc}")
-        current = [pidx.get(t.current_pool) for t in s.teams]
-        hint = current if all(c is not None for c in current) else None
+        require_matrix()
         if body.hint:
-            h = check_assignment(body.hint)
-            if len(h) == len(s.teams):
-                hint = [pidx[h[t.id]] for t in s.teams]
-        unit = 6 if body.metric == "duration" else 10  # minutes -> 10 s ; km -> 100 m
-        params = OptimizeParams(
-            pool_sizes=[sizes[p] for p in pools],
-            locks=locks,
-            forbidden_pairs=pairs(body.forbidden_pairs),
-            imposed_pairs=pairs(body.imposed_pairs),
-            clubs=[t.club for t in s.teams] if body.separate_clubs else None,
-            current=current,
-            stability_penalty=round(max(0.0, body.stability_weight) * unit),
-            fairness=body.fairness,
-            time_limit=body.time_limit,
-            workers=settings.solver_workers,
-            hint=hint,
-        )
-        res = solve(integer_costs(m, body.metric), params)
-        out = {"status": res.status, "message": res.message, "wall_time": round(res.wall_time, 2),
-               "objective": res.objective, "best_bound": res.best_bound}
-        if res.ok:
-            assignment = {t.id: pools[res.assignment[i]] for i, t in enumerate(s.teams)}
-            out["assignment"] = assignment
-            out["metrics"] = evaluate(s.teams, m, assignment, pools)
-            if res.objective:
-                out["gap"] = round(max(0.0, (res.objective - res.best_bound) / res.objective), 4)
-        return out
+            check_assignment(body.hint)
+        try:
+            return st().optimize(body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+    @app.get("/api/optimal")
+    def get_optimal():
+        return {"optimal": st().optimal, "fresh": st().optimal_is_fresh}
 
     # -- exports -----------------------------------------------------------
     def attachment(content, media: str, name: str) -> Response:
         return Response(content, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
-    @app.post("/api/export/assignment.csv")
-    def export_assignment(body: ExportIn):
+    def export_context(body: ExportIn):
         m = require_matrix()
         s = st()
         metrics = evaluate(s.teams, m, check_assignment(body.assignment), s.pools)
-        return attachment(exports.assignment_csv(s.teams, metrics), "text/csv; charset=utf-8", "repartition.csv")
+        opt_a = s.optimal_assignment()
+        optimal = evaluate(s.teams, m, opt_a, s.pools) if opt_a else None
+        current = evaluate(s.teams, m, {t.id: t.current_pool for t in s.teams}, s.pools)
+        return s, m, metrics, optimal, current
+
+    @app.post("/api/export/assignment.csv")
+    def export_assignment(body: ExportIn):
+        s, m, metrics, optimal, current = export_context(body)
+        return attachment(exports.assignment_csv(s.teams, metrics, optimal, current, body.label),
+                          "text/csv; charset=utf-8", f"repartition_{exports.slug(body.label)}.csv")
 
     @app.post("/api/export/matrix.csv")
     def export_matrix(body: ExportIn):
@@ -249,11 +220,10 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
 
     @app.post("/api/export/report.pdf")
     def export_pdf(body: ExportIn):
-        m = require_matrix()
-        s = st()
-        metrics = evaluate(s.teams, m, check_assignment(body.assignment), s.pools)
-        ref = evaluate(s.teams, m, check_assignment(body.reference), s.pools) if body.reference else None
-        return attachment(exports.report_pdf(s.teams, m, metrics, s.pools, ref), "application/pdf", "repartition.pdf")
+        s, m, metrics, optimal, current = export_context(body)
+        pdf = exports.report_pdf(s.teams, m, metrics, s.pools, optimal=optimal, current=current,
+                                 label=body.label, optimal_info=s.optimal, tiles=s.tiles)
+        return attachment(pdf, "application/pdf", f"repartition_{exports.slug(body.label)}.pdf")
 
     # -- interface ---------------------------------------------------------
     @app.get("/")

@@ -29,27 +29,50 @@ suivants sont instantanés grâce aux caches.
 ## Utilisation
 
 ### Onglet Répartition
-- **Carte** : un marqueur coloré par poule, étiquette avec le nom du club (case « Étiquettes »).
-  Un clic sur une équipe (carte ou colonne) trace ses trajets vers les adversaires de sa poule.
-- **Trois colonnes de poules** en glisser-déposer. Après chaque déplacement, recalcul immédiat :
-  km cumulés de la poule, km saison par équipe, écart avec la dernière solution optimisée
-  (en vert : moins de km que l'optimum, en rouge : plus).
-- **Case 🔒** sur chaque équipe : verrouille l'équipe dans sa poule affichée pour la prochaine optimisation.
-- **Optimiser** : relance CP-SAT en respectant verrous, paires et options. **Revenir à la poule
-  actuelle** restaure la répartition du CSV. **Dernier optimum** réaffiche la dernière solution calculée.
-- **Options** :
-  - critère distance (km) ou durée (heures) ;
-  - nombre d'équipes par poule (12 par défaut, modifiable) ;
-  - équipes d'un même club dans des poules différentes ;
-  - **stabilité** : pénalité (en km, ou en minutes si critère durée) par équipe qui change de poule ;
-  - **équité** : curseur entre « total des km » et « pire équipe » ;
-  - limite de temps (30 s par défaut) : le meilleur résultat trouvé est affiché, avec l'écart à la borne
-    si l'optimalité n'est pas prouvée.
-- **Paires** imposées (même poule) ou interdites (poules différentes).
-- **Indicateurs** : km cumulés par poule, équipe la plus pénalisée, trajet le plus long.
-- **Comparatif avant / après** : poules actuelles, répartition affichée, dernier optimum.
-- **Exports** : répartition CSV, matrice des distances CSV (km ou minutes), rapport PDF
-  (synthèse, poules, matrice par poule et matrice complète).
+
+**Trois versions côte à côte**, toujours disponibles :
+- **Poules actuelles** : A, B, C telles que dans `clubs.csv` ;
+- **Version optimale** : résultat du solveur, calculé automatiquement au lancement (puis conservé dans
+  `cache/optimal.json`), recalculable avec le bouton **Optimiser**. Elle reste la référence, avec son
+  kilométrage total et son statut (« optimale prouvée » ou « meilleure trouvée », écart à la borne) ;
+- **Ma version** : copie modifiable, initialisée au choix depuis les poules actuelles ou la version optimale.
+
+Chaque carte de version indique ses km cumulés, l'écart en km et en % avec les deux autres, et les km par poule.
+
+**Carte OpenStreetMap**
+- Une couleur **et une forme** par poule (cercle bleu, carré orange, triangle vert) : palette vérifiée pour
+  les daltoniens, la forme lève toute ambiguïté. Nom du club à côté de chaque marqueur (case « Noms »).
+- Sélecteur de version affichée (poules actuelles / optimale / Ma version) ; un échange change
+  immédiatement la couleur et la forme des marqueurs.
+- Liaisons au choix : aucune, enveloppe convexe de chaque poule, ou étoile autour du barycentre.
+- Survol d'un marqueur : commune, poule, kilométrage annuel, trajet le plus long. Clic : sélection de
+  l'équipe et tracé de ses trajets.
+
+**Modifier Ma version**
+- Glisser une équipe vers une autre poule, ou utiliser son menu **⇄**. Comme chaque poule garde son
+  effectif, une fenêtre propose l'**échange** avec chaque équipe de la poule d'arrivée et affiche, avant
+  validation, l'impact sur le total (km et %), sur les deux équipes (avant / après) et sur les deux poules.
+  Déposer l'équipe sur une carte précise présélectionne cette équipe comme partenaire.
+- Panneau **Impact** : variation du total par rapport à la version optimale et aux poules actuelles (km et %),
+  km de chaque poule, détail du dernier échange (avant / après), équipe la plus pénalisée, trajet le plus long.
+  Les km de chaque équipe et leur écart avec la version optimale sont sur les cartes d'équipe.
+- **Historique** avec Annuler / Rétablir (boutons, Ctrl+Z, Ctrl+Y ou Ctrl+Maj+Z), conservé entre deux sessions.
+- **🔒** verrouille une équipe dans sa poule de Ma version : **Optimiser** optimise alors le reste, et le
+  résultat remplace la version optimale de référence.
+- Tableau des **10 meilleurs échanges** de deux équipes (hors équipes verrouillées) à partir de Ma version,
+  avec le gain et un bouton « Appliquer ».
+
+**Réglages de l'optimisation** : critère distance (km) ou durée (heures) ; nombre d'équipes par poule
+(12 par défaut) ; équipes d'un même club séparées ; **stabilité** (pénalité en km, ou en minutes, par équipe
+qui change de poule) ; **équité** (curseur entre « total des km » et « pire équipe ») ; limite de temps
+(30 s par défaut) ; **paires** imposées (même poule) ou interdites.
+
+**Exports** de la version choisie :
+- CSV : poules, km par équipe, poule et km dans la version optimale, écart, synthèse par poule et écarts
+  totaux avec la version optimale et les poules actuelles ;
+- PDF : comparatif avec la version optimale et les poules actuelles, **carte** (fond OpenStreetMap mis en
+  cache dans `cache/tiles`, ou fond neutre hors ligne), poules et km par équipe, matrices des distances ;
+- matrice des distances (km) ou des durées (minutes) en CSV.
 
 ### Onglet Géocodage
 Liste les équipes non géolocalisées (échec Nominatim, commune vide) et celles marquées
@@ -91,7 +114,9 @@ poules actuelles.
 | `data/corrections.json` | positions corrigées ou validées dans l'écran Géocodage |
 | `cache/geocode.json` | cache Nominatim (les échecs sont aussi mis en cache ; « Relancer le géocodage » les retente) |
 | `cache/matrix.json` | cache OSRM par paire de points (un point déplacé ne recalcule que ce qui manque) |
-| `cache/ui_state.json` | dernière répartition affichée, verrous, paires, réglages, dernier optimum |
+| `cache/optimal.json` | version optimale de référence (recalculée si la matrice change) |
+| `cache/tiles/` | tuiles OpenStreetMap utilisées pour la carte du PDF |
+| `cache/ui_state.json` | Ma version, historique, verrous, paires, réglages, version affichée |
 
 Supprimer le dossier `cache/` force un nouveau géocodage et un nouveau calcul de matrice.
 
@@ -105,6 +130,7 @@ Supprimer le dossier `cache/` force un nouveau géocodage et un nouveau calcul d
 | `PNMAP_CACHE_DIR` | `cache` |
 | `PNMAP_NOMINATIM_URL` | `https://nominatim.openstreetmap.org` |
 | `PNMAP_OSRM_URL` | `https://router.project-osrm.org` |
+| `PNMAP_TILE_URL` | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` (fond de carte du PDF) |
 | `PNMAP_USER_AGENT` | `PNMap/1.0 (...)` : à personnaliser avec un contact, comme le demande la politique Nominatim |
 
 ## OSRM en local avec Docker (facultatif)
@@ -140,8 +166,9 @@ dans la barre de statut ; ces valeurs de repli ne sont pas mises en cache.
 - `tests/test_optimizer.py` : jeu de 6 équipes (Strasbourg, Colmar, Mulhouse / Reims, Châlons,
   Troyes) dont la solution est connue, contrôle par énumération exhaustive, verrous, paires,
   clubs, stabilité, équité, critère durée, cas infaisables.
-- `tests/test_api.py` : géocodage et OSRM simulés (aucun accès réseau), cache, écran de
-  correction, optimisation, évaluation et exports via l'API.
+- `tests/test_api.py` : géocodage, OSRM et tuiles simulés (aucun accès réseau), cache, écran de
+  correction, version optimale calculée au lancement et conservée, optimisation avec verrous,
+  évaluation et exports (CSV avec comparatif, PDF avec carte) via l'API.
 
 ## Structure
 
@@ -154,6 +181,7 @@ app/
   optimizer.py   modèle CP-SAT
   metrics.py     indicateurs (km et heures par équipe et par poule)
   exports.py     CSV et PDF
+  pdfmap.py      carte du PDF (tuiles OSM en cache, enveloppes, marqueurs)
   state.py       état de l'application et tâche de fond
   main.py        API FastAPI
 static/          interface (HTML, CSS, JS, Leaflet embarqué)

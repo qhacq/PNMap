@@ -22,81 +22,118 @@
 <main>
 <!-- ============================ RÉPARTITION ============================ -->
 <section id="tab-repartition" class="tab-panel active">
+  <div id="versions" class="versions"></div>
+
   <div class="top">
     <div class="map-wrap">
       <div id="map"></div>
-      <label class="map-opt"><input type="checkbox" id="show-labels" checked> Étiquettes</label>
+      <div class="map-ctrl">
+        <div class="seg" id="view-seg" role="radiogroup" aria-label="Version affichée">
+          <button data-view="current">Poules actuelles</button>
+          <button data-view="optimal">Version optimale</button>
+          <button data-view="mine">Ma version</button>
+        </div>
+        <label>Liaisons
+          <select id="link-mode">
+            <option value="none">aucune</option>
+            <option value="hull">enveloppe convexe</option>
+            <option value="star">étoile (barycentre)</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="show-labels" checked> Noms</label>
+      </div>
+      <div id="legend" class="legend"></div>
     </div>
     <aside class="side">
       <div class="card">
-        <h2>Indicateurs</h2>
-        <div id="indicators" class="indicators"></div>
+        <h2>Impact de Ma version</h2>
+        <div id="impact"></div>
       </div>
       <div class="card">
-        <h2>Optimisation</h2>
-        <div class="form-grid">
-          <label>Critère
-            <select id="metric">
-              <option value="distance">Distance (km)</option>
-              <option value="duration">Durée (heures)</option>
-            </select>
-          </label>
-          <label>Limite de temps (s)
-            <input type="number" id="time-limit" min="1" max="3600" value="30">
-          </label>
-          <div id="pool-sizes" class="pool-sizes"></div>
-          <label class="full"><input type="checkbox" id="separate-clubs" checked>
-            Équipes d'un même club dans des poules différentes</label>
-          <label class="full">Stabilité : <b id="stability-val"></b>
-            <input type="range" id="stability" min="0" max="500" step="5" value="0">
-            <small>Pénalité par équipe qui change de poule (0 = désactivée)</small>
-          </label>
-          <label class="full">Équité : <b id="fairness-val"></b>
-            <input type="range" id="fairness" min="0" max="1" step="0.05" value="0">
-            <small class="range-ends"><span>Total des km</span><span>Pire équipe</span></small>
-          </label>
-        </div>
+        <h2>Historique</h2>
         <div class="buttons">
-          <button id="btn-optimize" class="primary">Optimiser</button>
-          <button id="btn-reset">Revenir à la poule actuelle</button>
-          <button id="btn-best" title="Réafficher la dernière solution optimisée">Dernier optimum</button>
+          <button id="btn-undo" title="Annuler (Ctrl+Z)">↶ Annuler</button>
+          <button id="btn-redo" title="Rétablir (Ctrl+Y)">↷ Rétablir</button>
         </div>
-        <div id="opt-message" class="message"></div>
-      </div>
-      <div class="card">
-        <h2>Paires imposées / interdites</h2>
-        <div class="pair-form">
-          <select id="pair-a"></select>
-          <select id="pair-type">
-            <option value="imposed">même poule</option>
-            <option value="forbidden">poules différentes</option>
-          </select>
-          <select id="pair-b"></select>
-          <button id="btn-add-pair">Ajouter</button>
-        </div>
-        <ul id="pairs" class="pairs"></ul>
-      </div>
-      <div class="card">
-        <h2>Exports</h2>
-        <div class="buttons">
-          <button data-export="assignment.csv">Répartition CSV</button>
-          <button data-export="matrix.csv" data-kind="distance">Matrice km CSV</button>
-          <button data-export="matrix.csv" data-kind="duration">Matrice minutes CSV</button>
-          <button data-export="report.pdf">Rapport PDF</button>
-        </div>
+        <ol id="history" class="history"></ol>
       </div>
     </aside>
   </div>
 
+  <div class="card">
+    <h2>Meilleurs échanges possibles depuis Ma version</h2>
+    <div id="best-swaps"></div>
+  </div>
+
+  <div class="pool-toolbar">
+    <h2 id="pools-title"></h2>
+    <span id="pools-hint" class="hint"></span>
+  </div>
+  <div id="pools" class="pools"></div>
+
   <div class="card compare-card">
-    <h2>Comparatif avant / après</h2>
+    <h2>Comparatif des trois versions</h2>
     <div id="compare"></div>
   </div>
 
-  <p class="hint">Glisser-déposer une équipe d'une poule à l'autre : les indicateurs sont recalculés aussitôt.
-    La case 🔒 verrouille l'équipe dans sa poule pour la prochaine optimisation.
-    Un clic sur une équipe affiche ses trajets sur la carte.</p>
-  <div id="pools" class="pools"></div>
+  <div class="bottom">
+    <div class="card">
+      <h2>Optimisation</h2>
+      <div class="form-grid">
+        <label>Critère
+          <select id="metric">
+            <option value="distance">Distance (km)</option>
+            <option value="duration">Durée (heures)</option>
+          </select>
+        </label>
+        <label>Limite de temps (s)
+          <input type="number" id="time-limit" min="1" max="3600" value="30">
+        </label>
+        <div id="pool-sizes" class="pool-sizes"></div>
+        <label class="full"><input type="checkbox" id="separate-clubs" checked>
+          Équipes d'un même club dans des poules différentes</label>
+        <label class="full">Stabilité : <b id="stability-val"></b>
+          <input type="range" id="stability" min="0" max="500" step="5" value="0">
+          <small>Pénalité par équipe qui change de poule (0 = désactivée)</small>
+        </label>
+        <label class="full">Équité : <b id="fairness-val"></b>
+          <input type="range" id="fairness" min="0" max="1" step="0.05" value="0">
+          <small class="range-ends"><span>Total des km</span><span>Pire équipe</span></small>
+        </label>
+      </div>
+      <p class="hint">Les équipes verrouillées 🔒 dans Ma version restent dans leur poule ; le solveur optimise le reste.
+        Le résultat remplace la Version optimale de référence.</p>
+      <div class="buttons"><button id="btn-optimize" class="primary">Optimiser</button></div>
+      <div id="opt-message" class="message"></div>
+    </div>
+    <div class="card">
+      <h2>Paires imposées / interdites</h2>
+      <div class="pair-form">
+        <select id="pair-a"></select>
+        <select id="pair-type">
+          <option value="imposed">même poule</option>
+          <option value="forbidden">poules différentes</option>
+        </select>
+        <select id="pair-b"></select>
+        <button id="btn-add-pair">Ajouter</button>
+      </div>
+      <ul id="pairs" class="pairs"></ul>
+      <h2 style="margin-top:14px">Exports</h2>
+      <label>Version
+        <select id="export-version">
+          <option value="mine">Ma version</option>
+          <option value="optimal">Version optimale</option>
+          <option value="current">Poules actuelles</option>
+        </select>
+      </label>
+      <div class="buttons">
+        <button data-export="assignment.csv">Répartition CSV</button>
+        <button data-export="report.pdf">Rapport PDF (carte, comparatif)</button>
+        <button data-export="matrix.csv" data-kind="distance">Matrice km CSV</button>
+        <button data-export="matrix.csv" data-kind="duration">Matrice minutes CSV</button>
+      </div>
+    </div>
+  </div>
 </section>
 
 <!-- ============================ GÉOCODAGE ============================= -->
@@ -138,6 +175,19 @@
   <div class="matrix-wrap"><table id="matrix" class="matrix"></table></div>
 </section>
 </main>
+
+<dialog id="swap-dialog" class="swap-dialog">
+  <form method="dialog">
+    <h3 id="swap-title"></h3>
+    <p class="hint">Chaque poule doit garder son effectif : choisir l'équipe de la poule d'arrivée à échanger.
+      Impact calculé sur Ma version ; trié du plus favorable au moins favorable.</p>
+    <div class="swap-table-wrap"><table class="swap-table" id="swap-table"></table></div>
+    <div class="buttons end">
+      <button value="cancel">Annuler</button>
+      <button id="swap-ok" value="ok" class="primary" disabled>Valider l'échange</button>
+    </div>
+  </form>
+</dialog>
 
 <div id="busy" class="busy hidden"><div><div class="spinner"></div><p id="busy-text"></p></div></div>
 

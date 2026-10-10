@@ -10,6 +10,7 @@ from app.data import club_key, load_teams
 from app.distances import DistanceProvider
 from app.geocode import Geocoder
 from app.main import create_app
+from app.pdfmap import TileFetcher
 from app.state import AppState
 
 CITIES = {
@@ -41,6 +42,24 @@ def osrm_down(request):
     return httpx.Response(503)
 
 
+def png_tile():
+    import io
+
+    from PIL import Image
+    out = io.BytesIO()
+    Image.new("RGB", (256, 256), (200, 220, 240)).save(out, format="PNG")
+    return out.getvalue()
+
+
+def fake_tiles(calls):
+    data = png_tile()
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, content=data, headers={"Content-Type": "image/png"})
+    return httpx.MockTransport(handler)
+
+
 @pytest.fixture
 def state(tmp_path):
     csv = tmp_path / "clubs.csv"
@@ -50,8 +69,12 @@ def state(tmp_path):
     geo = Geocoder(settings.geocode_cache, "http://nominatim.test", "PNMap-test/1.0", min_interval=0,
                    client=httpx.Client(transport=fake_nominatim(calls)))
     dist = DistanceProvider(settings.matrix_cache, "http://osrm.test", client=httpx.Client(transport=httpx.MockTransport(osrm_down)))
-    s = AppState(settings, geocoder=geo, distances=dist)
+    tile_calls = []
+    tiles = TileFetcher(settings.tiles_dir, "http://tiles.test/{z}/{x}/{y}.png", "PNMap-test/1.0",
+                        client=httpx.Client(transport=fake_tiles(tile_calls)))
+    s = AppState(settings, geocoder=geo, distances=dist, tiles=tiles)
     s.calls = calls
+    s.tile_calls = tile_calls
     return s
 
 
@@ -136,8 +159,13 @@ def test_optimize_evaluate_export(state, client):
     assert csv.status_code == 200 and "km_saison" in csv.text
     mx = client.post("/api/export/matrix.csv", json={"assignment": body["assignment"]})
     assert mx.text.count("\n") >= 7
-    pdf = client.post("/api/export/report.pdf", json={"assignment": body["assignment"], "reference": current})
+    pdf = client.post("/api/export/report.pdf", json={"assignment": current, "label": "Poules actuelles"})
     assert pdf.content[:4] == b"%PDF"
+    assert pdf.headers["content-disposition"].endswith('repartition_poules_actuelles.pdf"')
+    assert state.tile_calls  # fond de carte OSM téléchargé...
+    n = len(state.tile_calls)
+    client.post("/api/export/report.pdf", json={"assignment": current})
+    assert len(state.tile_calls) == n  # ...puis servi par le cache local
 
 
 def test_optimize_with_lock_and_stability(state, client):
@@ -175,3 +203,33 @@ def test_osrm_used_and_cached(tmp_path):
     assert m.distance_m[0][2] == 0 and m.distance_m[0][1] == 1000.0
     dp2 = DistanceProvider(tmp_path / "m.json", "http://osrm.test", client=httpx.Client(transport=httpx.MockTransport(osrm)))
     assert dp2.matrix(coords).distance_m == m.distance_m and len(calls) == 1  # servi par le cache
+
+
+def test_optimal_computed_at_startup_and_persisted(state, client):
+    assert client.get("/api/optimal").json()["optimal"] is None  # pas de matrice : pas d'optimum
+    ready(client, state)  # la localisation corrigée relance matrice + optimisation initiale
+    st = client.get("/api/state").json()
+    opt = st["optimal"]
+    assert st["optimal_fresh"] and opt["status"] == "OPTIMAL" and opt["proven"]
+    assert opt["params"]["pool_sizes"] == {"A": 3, "B": 3}
+    a = {int(k): v for k, v in opt["assignment"].items()}
+    assert a[1] != a[6]
+    assert json.loads(state.settings.optimal_file.read_text(encoding="utf-8"))["total_km"] == opt["total_km"]
+
+    # Optimisation relancée avec un verrou : la référence est remplacée.
+    r = client.post("/api/optimize", json={"pool_sizes": {"A": 3, "B": 3}, "locks": {"4": "A", "1": "A"},
+                                           "time_limit": 5}).json()
+    assert r["optimal"]["params"]["locks"] == {"4": "A", "1": "A"}
+    assert client.get("/api/optimal").json()["optimal"]["assignment"]["4"] == "A"
+
+    # Rechargement : l'optimum stocké est réutilisé tant que la matrice ne change pas.
+    s2 = AppState(state.settings, geocoder=state.geocoder, distances=state.distances, tiles=state.tiles)
+    s2.compute_matrix()
+    assert s2.optimal_is_fresh and s2.optimal_assignment()[4] == "A"
+
+
+def test_csv_compares_with_optimal(state, client):
+    ready(client, state)
+    current = {t["id"]: t["current_pool"] for t in client.get("/api/state").json()["teams"]}
+    csv = client.post("/api/export/assignment.csv", json={"assignment": current, "label": "Poules actuelles"}).text
+    assert "poule_version_optimale" in csv and "ecart vs version optimale" in csv

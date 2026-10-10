@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import csv
 import io
+import re
+import unicodedata
 from datetime import datetime
 
 from reportlab.lib import colors
@@ -13,34 +15,60 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, 
 
 from .data import Team
 from .distances import Matrix
+from .pdfmap import POOL_COLORS, MapFlowable
 
-POOL_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b"]
 
 
 def _fmt(x: float, digits: int = 1) -> str:
     return f"{x:.{digits}f}".replace(".", ",")
 
 
-def assignment_csv(teams: list[Team], metrics: dict) -> str:
+def slug(label: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode().lower()).strip("_") or "version"
+
+
+def _pct(delta: float, ref: float) -> str:
+    return f"{'+' if delta > 0 else ''}{_fmt(100 * delta / ref, 1)} %" if ref else ""
+
+
+def _signed(x: float, digits: int = 0) -> str:
+    return ("+" if x > 0 else "") + _fmt(x, digits)
+
+
+def assignment_csv(teams: list[Team], metrics: dict, optimal: dict | None = None,
+                   current: dict | None = None, label: str = "Ma version") -> str:
     by_id = {t.id: t for t in teams}
+    opt_team = {r["id"]: r for r in optimal["teams"]} if optimal else {}
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
-    w.writerow(["poule", "id", "club_ffbb", "commune", "poule_actuelle", "change_de_poule",
-                "km_saison", "heures_saison", "trajet_le_plus_long_km", "vers"])
+    w.writerow([f"Répartition : {label}"])
+    w.writerow(["poule", "id", "club_ffbb", "commune", "poule_actuelle", "poule_version_optimale",
+                "change_de_poule", "km_saison", "km_saison_version_optimale", "ecart_km_vs_optimale",
+                "heures_saison", "trajet_le_plus_long_km", "vers"])
     for r in sorted(metrics["teams"], key=lambda r: (r["pool"] or "", r["id"])):
         t = by_id[r["id"]]
-        w.writerow([r["pool"], t.id, t.name, t.commune, t.current_pool, "oui" if r["moved"] else "non",
-                    _fmt(r["km"]), _fmt(r["hours"], 2), _fmt(r["longest_trip_km"]), r["longest_trip_to"] or ""])
+        o = opt_team.get(t.id)
+        w.writerow([r["pool"], t.id, t.name, t.commune, t.current_pool, o["pool"] if o else "",
+                    "oui" if r["moved"] else "non", _fmt(r["km"]), _fmt(o["km"]) if o else "",
+                    _signed(r["km"] - o["km"], 1) if o else "", _fmt(r["hours"], 2),
+                    _fmt(r["longest_trip_km"]), r["longest_trip_to"] or ""])
     w.writerow([])
-    w.writerow(["poule", "nb_equipes", "km_cumules", "heures_cumulees", "km_moyen_par_equipe",
+    w.writerow(["poule", "nb_equipes", f"km_cumules_{slug(label)}", "km_version_optimale", "km_poules_actuelles",
                 "equipe_la_plus_penalisee", "km", "trajet_le_plus_long", "km"])
-    for p in metrics["pools"]:
+    for k, p in enumerate(metrics["pools"]):
         worst, longest = p["worst_team"] or {}, p["longest_trip"] or {}
-        w.writerow([p["pool"], p["size"], _fmt(p["km"]), _fmt(p["hours"]), _fmt(p["avg_km"]),
+        w.writerow([p["pool"], p["size"], _fmt(p["km"]),
+                    _fmt(optimal["pools"][k]["km"]) if optimal else "", _fmt(current["pools"][k]["km"]) if current else "",
                     worst.get("name", ""), _fmt(worst.get("km", 0)),
                     f"{longest.get('from', '')} > {longest.get('to', '')}", _fmt(longest.get("km", 0))])
-    w.writerow(["TOTAL", len(teams), _fmt(metrics["total_km"]), _fmt(metrics["total_hours"])])
-    return "﻿" + buf.getvalue()
+    w.writerow(["TOTAL", len(teams), _fmt(metrics["total_km"]),
+                _fmt(optimal["total_km"]) if optimal else "", _fmt(current["total_km"]) if current else ""])
+    w.writerow([])
+    for name, ref in (("version optimale", optimal), ("poules actuelles", current)):
+        if ref:
+            d = metrics["total_km"] - ref["total_km"]
+            w.writerow([f"ecart vs {name}", _signed(d, 1) + " km", _pct(d, ref["total_km"])])
+    return "\ufeff" + buf.getvalue()
 
 
 def matrix_csv(teams: list[Team], matrix: Matrix, kind: str = "distance") -> str:
@@ -63,60 +91,98 @@ def _hex(c: str) -> colors.Color:
 
 
 def report_pdf(teams: list[Team], matrix: Matrix, metrics: dict, pools: list[str],
-               reference: dict | None = None, title: str = "Répartition Pré-Nationale Masculine Grand Est") -> bytes:
+               optimal: dict | None = None, current: dict | None = None, label: str = "Ma version",
+               optimal_info: dict | None = None, tiles=None,
+               title: str = "Répartition Pré-Nationale Masculine Grand Est") -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=landscape(A4), leftMargin=10 * mm, rightMargin=10 * mm,
-                            topMargin=10 * mm, bottomMargin=10 * mm, title=title)
+                            topMargin=10 * mm, bottomMargin=10 * mm, title=f"{title} : {label}")
     styles = getSampleStyleSheet()
     small = styles["BodyText"].clone("small", fontSize=8, leading=10)
     tiny_style = styles["BodyText"].clone("tiny", fontSize=7, leading=8.5)
-    story = [Paragraph(title, styles["Title"]),
-             Paragraph(f"Édité le {datetime.now():%d/%m/%Y %H:%M}. Matrice : {matrix.source}. "
-                       "Km saison = somme des allers-retours vers chaque adversaire de la poule.", small),
-             Spacer(1, 4 * mm)]
     by_id = {t.id: t for t in teams}
     pool_color = {p: _hex(POOL_COLORS[k % len(POOL_COLORS)]) for k, p in enumerate(pools)}
+    status = ""
+    if optimal_info:
+        status = (" Version optimale : optimalité prouvée." if optimal_info.get("proven") else
+                  f" Version optimale : meilleure solution trouvée (écart à la borne {_fmt(100 * optimal_info.get('gap', 0), 1)} %).")
+    story = [Paragraph(f"{title} : {label}", styles["Title"]),
+             Paragraph(f"Édité le {datetime.now():%d/%m/%Y %H:%M}. Matrice : {matrix.source}. "
+                       f"Km saison = somme des allers-retours vers chaque adversaire de la poule.{status}", small),
+             Spacer(1, 3 * mm)]
 
-    # Synthèse.
-    rows = [["Poule", "Équipes", "Km cumulés", "Heures", "Km moyen", "Équipe la plus pénalisée", "Trajet le plus long"]]
-    for p in metrics["pools"]:
-        worst, longest = p["worst_team"] or {}, p["longest_trip"] or {}
-        rows.append([p["pool"], p["size"], _fmt(p["km"], 0), _fmt(p["hours"], 0), _fmt(p["avg_km"], 0),
-                     Paragraph(f"{worst.get('name', '')} ({_fmt(worst.get('km', 0), 0)} km)", small),
-                     Paragraph(f"{longest.get('from', '')} &gt; {longest.get('to', '')} "
-                               f"({_fmt(longest.get('km', 0), 0)} km)", small)])
-    rows.append(["Total", len(teams), _fmt(metrics["total_km"], 0), _fmt(metrics["total_hours"], 0), "", "", ""])
-    if reference:
-        rows.append(["Référence", "", _fmt(reference["total_km"], 0), _fmt(reference["total_hours"], 0),
-                     "", f"Écart : {_fmt(metrics['total_km'] - reference['total_km'], 0)} km", ""])
-    tbl = Table(rows, repeatRows=1, colWidths=[18 * mm, 16 * mm, 22 * mm, 16 * mm, 18 * mm, 85 * mm, 102 * mm])
-    style = [("FONTSIZE", (0, 0), (-1, -1), 8), ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8e8e8")),
-             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE")]
-    for k, p in enumerate(metrics["pools"], start=1):
-        style.append(("TEXTCOLOR", (0, k), (0, k), pool_color.get(p["pool"], colors.black)))
-    tbl.setStyle(TableStyle(style))
-    story += [tbl, Spacer(1, 5 * mm)]
+    # Comparatif avec la version optimale et les poules actuelles.
+    cols = [(label, metrics)] + [(n, m) for n, m in (("Version optimale", optimal), ("Poules actuelles", current)) if m]
+    head = ["Indicateur"] + [n for n, _ in cols]
+    if optimal:
+        head.append("Écart vs optimale")
+    if current:
+        head.append("Écart vs actuelles")
+
+    def line(name, get, digits=0, unit="km"):
+        vals = [get(m) for _, m in cols]
+        row = [name] + [_fmt(v, digits) if v is not None else "" for v in vals]
+        for ref in (optimal, current):
+            if ref:
+                d = get(metrics) - get(ref)
+                row.append(f"{_signed(d, digits)} {unit}" + (f" ({_pct(d, get(ref))})" if unit == "km" else ""))
+        return row
+
+    rows = [head, line("Km cumulés (total)", lambda m: m["total_km"])]
+    for k, p in enumerate(pools):
+        rows.append(line(f"Poule {p} (km)", lambda m, k=k: m["pools"][k]["km"]))
+    rows.append(line("Heures cumulées", lambda m: m["total_hours"], 0, "h"))
+    rows.append(line("Km de l'équipe la plus pénalisée", lambda m: (m["worst_team"] or {}).get("km", 0)))
+    rows.append(line("Trajet le plus long (km, aller)", lambda m: (m["longest_trip"] or {}).get("km", 0)))
+    rows.append(line("Équipes changeant de poule", lambda m: m["moved"], 0, ""))
+    tbl = Table(rows, repeatRows=1)
+    tbl.setStyle(TableStyle([("FONTSIZE", (0, 0), (-1, -1), 8), ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+                             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8e8e8")),
+                             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                             ("BACKGROUND", (1, 1), (1, -1), colors.HexColor("#f5f8ff"))]))
+    story += [tbl, Spacer(1, 3 * mm)]
+    worst, longest = metrics["worst_team"] or {}, metrics["longest_trip"] or {}
+    story.append(Paragraph(
+        f"Équipe la plus pénalisée : <b>{worst.get('name', '')}</b> (poule {worst.get('pool', '')}, "
+        f"{_fmt(worst.get('km', 0), 0)} km). Trajet le plus long : <b>{longest.get('from', '')}</b> &gt; "
+        f"<b>{longest.get('to', '')}</b> ({_fmt(longest.get('km', 0), 0)} km).", small))
+
+    # Carte.
+    story += [PageBreak(), Paragraph(f"Carte : {label}", styles["Heading2"])]
+    pool_of = {r["id"]: r["pool"] for r in metrics["teams"]}
+    pts = [(t.lat, t.lon, pool_of.get(t.id), str(t.id)) for t in teams if t.located]
+    if pts:
+        story.append(MapFlowable(pts, pools, doc.width, doc.height - 22 * mm, tiles))
+        story.append(Paragraph("Chaque poule a sa couleur et sa forme (voir légende). Numéros : identifiants "
+                               "des équipes (voir tableaux). Pointillés : enveloppe de chaque poule.", small))
 
     # Détail par poule, côte à côte.
-    cols = []
+    story += [PageBreak(), Paragraph(f"Poules et kilométrage par équipe : {label}", styles["Heading2"])]
+    opt_team = {r["id"]: r for r in optimal["teams"]} if optimal else {}
+    cols_tbl = []
     for p in pools:
         members = sorted((r for r in metrics["teams"] if r["pool"] == p), key=lambda r: -r["km"])
-        data = [[f"Poule {p}", "Commune", "Km", "Act."]]
+        data = [[f"Poule {p}", "Commune", "Km", "Δ opt.", "Act."]]
         for r in members:
             t = by_id[r["id"]]
+            o = opt_team.get(t.id)
             data.append([Paragraph(f"{t.id}. {t.name}", tiny_style), Paragraph(t.commune, tiny_style),
-                         _fmt(r["km"], 0), t.current_pool + ("*" if r["moved"] else "")])
-        tb = Table(data, colWidths=[46 * mm, 22 * mm, 11 * mm, 9 * mm], repeatRows=1)
+                         _fmt(r["km"], 0), _signed(r["km"] - o["km"], 0) if o else "",
+                         t.current_pool + ("*" if r["moved"] else "")])
+        pm = next(x for x in metrics["pools"] if x["pool"] == p)
+        data.append(["Total poule", "", _fmt(pm["km"], 0), "", ""])
+        tb = Table(data, colWidths=[42 * mm, 20 * mm, 11 * mm, 10 * mm, 8 * mm], repeatRows=1)
         tb.setStyle(TableStyle([("FONTSIZE", (0, 0), (-1, -1), 7), ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
                                 ("BACKGROUND", (0, 0), (-1, 0), pool_color[p]),
-                                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#111827")),
+                                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
                                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
-        cols.append(tb)
-    if cols:
-        story.append(Table([cols], style=[("VALIGN", (0, 0), (-1, -1), "TOP"),
-                                          ("LEFTPADDING", (0, 0), (-1, -1), 1), ("RIGHTPADDING", (0, 0), (-1, -1), 1)]))
-        story.append(Paragraph("* : équipe qui change de poule par rapport à la poule actuelle.", small))
+        cols_tbl.append(tb)
+    if cols_tbl:
+        story.append(Table([cols_tbl], style=[("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                              ("LEFTPADDING", (0, 0), (-1, -1), 1), ("RIGHTPADDING", (0, 0), (-1, -1), 1)]))
+        story.append(Paragraph("* : équipe qui change de poule par rapport à la poule actuelle. "
+                               "Δ opt. : écart de kilométrage de l'équipe par rapport à la version optimale.", small))
 
     # Matrices par poule (km, aller simple).
     idx = {t.id: i for i, t in enumerate(teams)}
@@ -133,7 +199,7 @@ def report_pdf(teams: list[Team], matrix: Matrix, metrics: dict, pools: list[str
         tb.setStyle(TableStyle([("FONTSIZE", (0, 0), (-1, -1), 7), ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
                                 ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
                                 ("BACKGROUND", (0, 0), (-1, 0), pool_color[p]),
-                                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white)]))
+                                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#111827"))]))
         story.append(tb)
 
     # Matrice complète.
@@ -153,7 +219,7 @@ def report_pdf(teams: list[Team], matrix: Matrix, metrics: dict, pools: list[str
     for i, t in enumerate(teams, start=1):
         c = pool_color.get(pool_of.get(t.id))
         if c:
-            style.append(("TEXTCOLOR", (0, i), (1, i), c))
+            style.append(("BACKGROUND", (0, i), (0, i), c))
     tb.setStyle(TableStyle(style))
     story.append(tb)
     doc.build(story)

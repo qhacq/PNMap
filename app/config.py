@@ -25,7 +25,7 @@ class Settings:
     ))
     # Politique d'usage Nominatim : 1 requête par seconde maximum.
     nominatim_min_interval: float = 1.05
-    default_pool_size: int = 12
+    tile_url: str = field(default_factory=lambda: _env("PNMAP_TILE_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"))
     default_time_limit: float = 30.0
     solver_workers: int = 8
 
@@ -36,6 +36,14 @@ class Settings:
     @property
     def matrix_cache(self) -> Path:
         return self.cache_dir / "matrix.json"
+
+    @property
+    def optimal_file(self) -> Path:
+        return self.cache_dir / "optimal.json"
+
+    @property
+    def tiles_dir(self) -> Path:
+        return self.cache_dir / "tiles"
 
     @property
     def ui_state_file(self) -> Path:
