@@ -478,13 +478,11 @@ function renderBestSwaps() {
 function renderPools() {
   const box = $("#pools");
   const A = S.V[S.view];
-  const editable = S.view === "mine";
+  const editable = true;  // toute modification s'applique à Ma version (copiée depuis la vue affichée si besoin)
   $("#pools-title").textContent = `Poules : ${VERSION_NAMES[S.view]}`;
-  $("#pools-hint").innerHTML = editable
-    ? "Glisser une équipe vers une autre poule (ou bouton ⇄) : choisir l'équipe à échanger, impact affiché avant validation. 🔒 verrouille l'équipe pour l'optimisation."
-    : `Lecture seule. <button id="btn-copy-view">Copier dans Ma version</button>`;
-  const copy = $("#btn-copy-view");
-  if (copy) copy.addEventListener("click", () => initMine(S.view));
+  $("#pools-hint").innerHTML = "Pour changer une équipe de poule : la glisser vers une autre poule, ou utiliser son bouton ⇄. " +
+    "Comme chaque poule garde 12 équipes, on choisit l'équipe à échanger, avec l'impact en km avant de valider." +
+    (S.view !== "mine" ? " La modification crée Ma version à partir de la répartition affichée." : "");
   box.style.setProperty("--n", S.pools.length);
   box.innerHTML = "";
   if (!A) return;
@@ -514,7 +512,7 @@ function renderPools() {
         const id = Number(e.dataTransfer.getData("text/plain"));
         const onCard = e.target.closest(".team");
         const partner = onCard ? Number(onCard.dataset.id) : null;
-        if (id && S.V.mine[id] !== p) openSwap(id, p, partner);
+        if (id && S.V[S.view][id] !== p) openSwap(id, p, partner);
       });
     }
     box.appendChild(col);
@@ -564,9 +562,13 @@ function teamCard(t, A, M, O, editable) {
 // ------------------------------------------------------------------ fenêtre d'échange
 let swapChoice = null;
 function openSwap(id, dest, preferred = null) {
+  if (!S.R) { toast("Les distances ne sont pas encore calculées : patienter quelques secondes.", "err"); return; }
+  if (S.locks.has(id)) { toast("Équipe verrouillée : décocher 🔒 pour la déplacer.", "err"); return; }
+  if (S.view !== "mine") {
+    // Modifier une autre vue : Ma version repart de cette répartition (annulable).
+    initMine(S.view);
+  }
   const A = S.V.mine;
-  if (!S.R) { setMessage("Matrice des distances indisponible.", "err"); return; }
-  if (S.locks.has(id)) { setMessage("Équipe verrouillée : la déverrouiller pour la déplacer.", "err"); return; }
   const sums = poolSums(A);
   const M = metricsOf(A);
   const cands = S.teams.filter(u => A[u.id] === dest)
@@ -641,7 +643,8 @@ function renderSummary() {
   const missing = S.teams.filter(t => !t.located);
   const warn = missing.length ? `<p class="warn-line">⚠ ${missing.length} équipe(s) sans localisation, km non comptés :
     ${missing.map(t => esc(t.name)).join(", ")}. <a href="#" data-goto-geo>Indiquer la commune ou la salle</a></p>` : "";
-  const notice = S.notice ? `<p class="warn-line">${esc(S.notice)}</p>` : "";
+  const notice = (S.notice ? `<p class="warn-line">${esc(S.notice)}</p>` : "") +
+    (S.jobError ? `<p class="warn-line">⚠ Erreur du calcul en arrière-plan : ${esc(S.jobError)}</p>` : "");
   const versions = ["current", "optimal", "mine"];
   const M = Object.fromEntries(versions.map(v => [v, metricsOf(S.V[v])]));
   if (!M.current) {
@@ -668,11 +671,18 @@ function renderSummary() {
       <p class="hint">Dans une poule, chaque équipe reçoit une fois et se déplace une fois chez chacune des autres :
         pour deux équipes, les deux rencontres font 2 allers-retours. Le km d'une poule est la somme de toutes ses rencontres.
         Les écarts sont calculés par rapport aux poules actuelles. Colonne surlignée : répartition affichée sur la carte et ci-dessous.</p>
+      <p class="small">${S.matrixSource === "osrm"
+        ? `<span class="src-ok">✔ Distances routières</span> (itinéraires en voiture calculés par OSRM sur les routes OpenStreetMap).`
+        : `<span class="src-bad">⚠ Distances provisoires à vol d'oiseau × 1,3</span> : le service d'itinéraires routiers OSRM n'a pas répondu${S.matrixSource === "mixte" ? " pour une partie des trajets" : ""}.
+           <button id="btn-retry-osrm">Réessayer les distances routières</button>`}</p>
       ${notice}${warn}`;
   }
   $$("[data-goto-geo]", box).forEach(a => a.addEventListener("click", e => { e.preventDefault(); $(".tab[data-tab=geocodage]").click(); }));
   $$("[data-show-col]", box).forEach(b => b.addEventListener("click", () => { setView(b.dataset.showCol); if (S.V[b.dataset.showCol]) renderAll(); }));
   $$("[data-matches]", box).forEach(b => b.addEventListener("click", () => openMatches(b.dataset.matches)));
+  const retry = $("#btn-retry-osrm", box);
+  if (retry) retry.addEventListener("click", () => api("/api/matrix/refresh", { method: "POST" })
+    .then(() => { toast("Calcul des distances routières relancé…"); pollStatus(); }).catch(e => toast(e.message, "err")));
 }
 
 /** Détail des rencontres aller-retour d'une poule de la répartition affichée. */
@@ -756,7 +766,27 @@ function setMessage(text, cls = "") {
   const el = $("#opt-message");
   el.className = "message " + cls;
   el.textContent = text;
+  toast(text, cls);
 }
+
+let toastTimer = null;
+function toast(text, cls = "") {
+  const el = $("#toast");
+  el.className = "toast " + cls;
+  el.textContent = text;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add("hidden"), cls === "err" ? 12000 : 6000);
+}
+
+// Toute erreur JavaScript est affichée en clair (à transmettre pour diagnostic).
+function showFatal(msg) {
+  const el = $("#fatal");
+  if (!el) return;
+  el.classList.remove("hidden");
+  el.innerHTML = `⚠ Erreur dans la page : <code>${esc(msg)}</code>. Recharger avec Ctrl+F5 ; si l'erreur reste, transmettre ce message.`;
+}
+window.addEventListener("error", e => showFatal(`${e.message} (${(e.filename || "").split("/").pop()}:${e.lineno})`));
+window.addEventListener("unhandledrejection", e => showFatal(e.reason?.message || String(e.reason)));
 
 function applyOptimal(o) {
   S.optimalInfo = o;
@@ -1009,6 +1039,7 @@ async function pollStatus() {
 
 function renderStatus(st) {
   S.matrixError = st.matrix_error;
+  S.jobError = st.job.error;
   const el = $("#status");
   const j = st.job;
   if (j.running) {
@@ -1126,4 +1157,4 @@ $("#btn-matrix").addEventListener("click", () => api("/api/matrix/refresh", { me
 $("#matrix-kind").addEventListener("change", renderMatrix);
 $("#matrix-by-pool").addEventListener("change", renderMatrix);
 
-init().catch(e => { $("#status").innerHTML = `<span class="err">${esc(e.message)}</span>`; console.error(e); });
+init().catch(e => { showFatal(e.message); console.error(e); });

@@ -6,11 +6,11 @@
 <title>PNMap · Poules PNM Grand Est</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ccircle cx=%2250%22 cy=%2250%22 r=%2245%22 fill=%22%23e8590c%22/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=__VERSION__">
 </head>
 <body>
 <header>
-  <h1>PNMap <span>Pré-Nationale Masculine Grand Est</span></h1>
+  <h1>PNMap <span>Pré-Nationale Masculine Grand Est</span> <small id="app-version" class="ver">__VERSION__</small></h1>
   <nav>
     <button class="tab active" data-tab="repartition">Répartition</button>
     <button class="tab" data-tab="geocodage">Géocodage <span id="review-badge" class="badge hidden"></span></button>
@@ -19,6 +19,8 @@
   <div id="status" class="status"></div>
 </header>
 
+<div id="fatal" class="fatal hidden"></div>
+<div id="toast" class="toast hidden"></div>
 <main>
 <!-- ============================ RÉPARTITION ============================ -->
 <section id="tab-repartition" class="tab-panel active">
@@ -193,6 +195,6 @@
 <div id="busy" class="busy hidden"><div><div class="spinner"></div><p id="busy-text"></p></div></div>
 
 <script src="/static/vendor/leaflet/leaflet.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=__VERSION__"></script>
 </body>
 </html>

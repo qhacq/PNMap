@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import exports
+from . import __version__, exports
 from .config import Settings
 from .metrics import evaluate
 from .state import AppState
@@ -230,7 +230,18 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
     # -- interface ---------------------------------------------------------
     @app.get("/")
     def index():
-        return FileResponse(STATIC_DIR / "index.html")
+        # Numéro de version dans les URL des fichiers : le navigateur ne peut pas garder
+        # un ancien app.js après une mise à jour.
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        tag = f"{__version__}-{int(max((STATIC_DIR / f).stat().st_mtime for f in ('app.js', 'style.css', 'index.html')))}"
+        return HTMLResponse(html.replace("__VERSION__", tag), headers={"Cache-Control": "no-store"})
+
+    @app.middleware("http")
+    async def no_stale_assets(request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith(("/static/app", "/static/style", "/api/")):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app

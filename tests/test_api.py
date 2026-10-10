@@ -267,3 +267,11 @@ def test_bundled_coordinates_used_without_network(tmp_path):
     s.start_job(optimize=False)
     s.wait_job(10)
     assert s.team(2).geo_source == "approx" and s.matrix is not None
+
+
+def test_index_busts_browser_cache(client):
+    from app import __version__
+    r = client.get("/")
+    assert r.headers["cache-control"] == "no-store"
+    assert f"/static/app.js?v={__version__}-" in r.text and "__VERSION__" not in r.text
+    assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
