@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PNMap · Poules PNM Grand Est</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ccircle cx=%2250%22 cy=%2250%22 r=%2245%22 fill=%22%23e8590c%22/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>PNMap <span>Pré-Nationale Masculine Grand Est</span></h1>
+  <nav>
+    <button class="tab active" data-tab="repartition">Répartition</button>
+    <button class="tab" data-tab="geocodage">Géocodage <span id="review-badge" class="badge hidden"></span></button>
+    <button class="tab" data-tab="matrice">Matrice</button>
+  </nav>
+  <div id="status" class="status"></div>
+</header>
+
+<main>
+<!-- ============================ RÉPARTITION ============================ -->
+<section id="tab-repartition" class="tab-panel active">
+  <div class="top">
+    <div class="map-wrap">
+      <div id="map"></div>
+      <label class="map-opt"><input type="checkbox" id="show-labels" checked> Étiquettes</label>
+    </div>
+    <aside class="side">
+      <div class="card">
+        <h2>Indicateurs</h2>
+        <div id="indicators" class="indicators"></div>
+      </div>
+      <div class="card">
+        <h2>Optimisation</h2>
+        <div class="form-grid">
+          <label>Critère
+            <select id="metric">
+              <option value="distance">Distance (km)</option>
+              <option value="duration">Durée (heures)</option>
+            </select>
+          </label>
+          <label>Limite de temps (s)
+            <input type="number" id="time-limit" min="1" max="3600" value="30">
+          </label>
+          <div id="pool-sizes" class="pool-sizes"></div>
+          <label class="full"><input type="checkbox" id="separate-clubs" checked>
+            Équipes d'un même club dans des poules différentes</label>
+          <label class="full">Stabilité : <b id="stability-val"></b>
+            <input type="range" id="stability" min="0" max="500" step="5" value="0">
+            <small>Pénalité par équipe qui change de poule (0 = désactivée)</small>
+          </label>
+          <label class="full">Équité : <b id="fairness-val"></b>
+            <input type="range" id="fairness" min="0" max="1" step="0.05" value="0">
+            <small class="range-ends"><span>Total des km</span><span>Pire équipe</span></small>
+          </label>
+        </div>
+        <div class="buttons">
+          <button id="btn-optimize" class="primary">Optimiser</button>
+          <button id="btn-reset">Revenir à la poule actuelle</button>
+          <button id="btn-best" title="Réafficher la dernière solution optimisée">Dernier optimum</button>
+        </div>
+        <div id="opt-message" class="message"></div>
+      </div>
+      <div class="card">
+        <h2>Paires imposées / interdites</h2>
+        <div class="pair-form">
+          <select id="pair-a"></select>
+          <select id="pair-type">
+            <option value="imposed">même poule</option>
+            <option value="forbidden">poules différentes</option>
+          </select>
+          <select id="pair-b"></select>
+          <button id="btn-add-pair">Ajouter</button>
+        </div>
+        <ul id="pairs" class="pairs"></ul>
+      </div>
+      <div class="card">
+        <h2>Exports</h2>
+        <div class="buttons">
+          <button data-export="assignment.csv">Répartition CSV</button>
+          <button data-export="matrix.csv" data-kind="distance">Matrice km CSV</button>
+          <button data-export="matrix.csv" data-kind="duration">Matrice minutes CSV</button>
+          <button data-export="report.pdf">Rapport PDF</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="card compare-card">
+    <h2>Comparatif avant / après</h2>
+    <div id="compare"></div>
+  </div>
+
+  <p class="hint">Glisser-déposer une équipe d'une poule à l'autre : les indicateurs sont recalculés aussitôt.
+    La case 🔒 verrouille l'équipe dans sa poule pour la prochaine optimisation.
+    Un clic sur une équipe affiche ses trajets sur la carte.</p>
+  <div id="pools" class="pools"></div>
+</section>
+
+<!-- ============================ GÉOCODAGE ============================= -->
+<section id="tab-geocodage" class="tab-panel">
+  <div class="geo-layout">
+    <div class="geo-list">
+      <div class="buttons">
+        <button id="btn-geocode">Relancer le géocodage (échecs compris)</button>
+        <button id="btn-matrix">Recalculer la matrice (OSRM)</button>
+        <label><input type="checkbox" id="show-all-geo"> Afficher toutes les équipes</label>
+      </div>
+      <p class="hint">Équipes non géolocalisées ou marquées « à vérifier ». Saisir l'adresse de la salle,
+        ou sélectionner l'équipe puis cliquer sur la carte (le marqueur est aussi déplaçable).
+        « Valider » confirme la position actuelle.</p>
+      <table class="geo-table">
+        <thead><tr><th>Équipe</th><th>Commune</th><th>Position</th><th>Correction</th></tr></thead>
+        <tbody id="geo-rows"></tbody>
+      </table>
+    </div>
+    <div class="geo-map-wrap">
+      <div id="geo-map"></div>
+      <div id="geo-help" class="geo-help">Sélectionner une équipe dans la liste.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ MATRICE =============================== -->
+<section id="tab-matrice" class="tab-panel">
+  <div class="buttons">
+    <label>Afficher
+      <select id="matrix-kind">
+        <option value="km">Distances (km, aller simple)</option>
+        <option value="minutes">Durées (minutes, aller simple)</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="matrix-by-pool" checked> Trier par poule affichée</label>
+    <span id="matrix-source" class="muted"></span>
+  </div>
+  <div class="matrix-wrap"><table id="matrix" class="matrix"></table></div>
+</section>
+</main>
+
+<div id="busy" class="busy hidden"><div><div class="spinner"></div><p id="busy-text"></p></div></div>
+
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
