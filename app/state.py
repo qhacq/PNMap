@@ -1,6 +1,7 @@
 """État de l'application : équipes, corrections de géolocalisation, matrice, tâche de fond."""
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -40,6 +41,7 @@ class AppState:
         self.matrix: Matrix | None = None
         self.matrix_error: str | None = None
         self.matrix_key: str | None = None
+        self._matrix_memo: dict[str, tuple[Matrix, str]] = {}
         # Version optimale de référence (résultat du solveur), conservée sur disque.
         self.optimal: dict | None = load_json(settings.optimal_file, None)
         self.lock = threading.RLock()
@@ -150,16 +152,13 @@ class AppState:
     def all_located(self) -> bool:
         return all(t.located for t in self.teams)
 
-    def compute_matrix(self, use_osrm: bool = True) -> Matrix | None:
+    def _build_matrix(self, teams: list[Team], use_osrm: bool = True) -> tuple[Matrix | None, str | None]:
         """Matrice sur les équipes localisées ; une équipe non localisée compte 0 km (signalée)."""
-        located = [i for i, t in enumerate(self.teams) if t.located]
+        located = [i for i, t in enumerate(teams) if t.located]
         if len(located) < 2:
-            self.matrix = None
-            self.matrix_error = "Pas assez d'équipes localisées pour calculer des distances."
-            return None
-        self.job.update(step="Calcul des distances routières (OSRM)", done=0, total=1)
-        sub = self.distances.matrix([(self.teams[i].lat, self.teams[i].lon) for i in located], use_osrm=use_osrm)
-        n = len(self.teams)
+            return None, None
+        sub = self.distances.matrix([(teams[i].lat, teams[i].lon) for i in located], use_osrm=use_osrm)
+        n = len(teams)
         dist = [[0.0] * n for _ in range(n)]
         dur = [[0.0] * n for _ in range(n)]
         for a, i in enumerate(located):
@@ -167,8 +166,57 @@ class AppState:
                 dist[i][j], dur[i][j] = sub.distance_m[a][b], sub.duration_s[a][b]
         m = Matrix(dist, dur, sub.source)
         key = hashlib.sha1(json.dumps(
-            [[t.id, round(t.lat, 5), round(t.lon, 5)] if t.located else [t.id] for t in self.teams]
+            [[t.id, round(t.lat, 5), round(t.lon, 5)] if t.located else [t.id] for t in teams]
             + [m.source]).encode()).hexdigest()
+        return m, key
+
+    def effective_teams(self, overrides: dict | None) -> list[Team]:
+        """Équipes avec les modifications faites dans le navigateur (nom, position)."""
+        if not overrides:
+            return self.teams
+        out = []
+        for t in self.teams:
+            o = overrides.get(t.id) or overrides.get(str(t.id))
+            if not o:
+                out.append(t)
+                continue
+            changes = {}
+            if o.get("name"):
+                changes["name"] = str(o["name"])
+            if o.get("lat") is not None and o.get("lon") is not None:
+                changes.update(lat=float(o["lat"]), lon=float(o["lon"]), geo_source="modifié",
+                               geo_label=str(o.get("label") or ""), adresse=str(o.get("adresse") or t.adresse))
+            out.append(dataclasses.replace(t, **changes))
+        return out
+
+    def matrix_for(self, overrides: dict | None) -> tuple[list[Team], Matrix, str]:
+        """Matrice pour les positions modifiées dans le navigateur (gardée en mémoire)."""
+        teams = self.effective_teams(overrides)
+        moved = any(a.lat != b.lat or a.lon != b.lon for a, b in zip(teams, self.teams))
+        if not moved:
+            if self.matrix is None:
+                self.compute_matrix()
+            if self.matrix is None:
+                raise RuntimeError(self.matrix_error or "Matrice des distances pas encore disponible.")
+            return teams, self.matrix, self.matrix_key
+        ck = json.dumps([[t.id, t.lat, t.lon] for t in teams])
+        hit = self._matrix_memo.get(ck)
+        if hit is None:
+            m, key = self._build_matrix(teams)
+            if m is None:
+                raise RuntimeError("Pas assez d'équipes localisées pour calculer des distances.")
+            if len(self._matrix_memo) > 20:
+                self._matrix_memo.clear()
+            hit = self._matrix_memo[ck] = (m, key)
+        return teams, hit[0], hit[1]
+
+    def compute_matrix(self, use_osrm: bool = True) -> Matrix | None:
+        self.job.update(step="Calcul des distances routières (OSRM)", done=0, total=1)
+        m, key = self._build_matrix(self.teams, use_osrm)
+        if m is None:
+            self.matrix = None
+            self.matrix_error = "Pas assez d'équipes localisées pour calculer des distances."
+            return None
         with self.lock:
             self.matrix = m
             self.matrix_key = key
@@ -211,9 +259,9 @@ class AppState:
         """Lance CP-SAT. req : pool_sizes, metric, locks, forbidden_pairs, imposed_pairs,
         separate_clubs, stability_weight, fairness, time_limit. En cas de succès, le résultat
         devient la version optimale de référence."""
-        m = self.matrix
-        if m is None:
-            raise RuntimeError(self.matrix_error or "Matrice des distances pas encore disponible.")
+        overrides = req.get("overrides") or None
+        teams, m, matrix_key = self.matrix_for(overrides)
+        custom = matrix_key != self.matrix_key  # positions modifiées dans le navigateur
         pools = self.pools
         pidx = {p: k for k, p in enumerate(pools)}
         tidx = {t.id: i for i, t in enumerate(self.teams)}
@@ -252,10 +300,11 @@ class AppState:
                "objective": res.objective, "best_bound": res.best_bound}
         if res.ok:
             assignment = {t.id: pools[res.assignment[i]] for i, t in enumerate(self.teams)}
-            metrics = evaluate(self.teams, m, assignment, pools)
+            metrics = evaluate(teams, m, assignment, pools)
             gap = round(max(0.0, (res.objective - res.best_bound) / res.objective), 4) if res.objective else 0.0
-            stored_req = {k: v for k, v in req.items() if k != "hint"}
+            stored_req = {k: v for k, v in req.items() if k not in ("hint", "overrides")}
             stored_req["pool_sizes"] = {p: int(sizes[p]) for p in pools}
+            previous = self.optimal
             self.optimal = {
                 "assignment": {str(k): v for k, v in assignment.items()},
                 "status": res.status,
@@ -265,12 +314,16 @@ class AppState:
                 "wall_time": out["wall_time"],
                 "total_km": metrics["total_km"],
                 "params": stored_req,
-                "matrix_key": self.matrix_key,
+                "matrix_key": matrix_key,
                 "matrix_source": m.source,
                 "computed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             }
-            save_json(self.settings.optimal_file, self.optimal)
-            out.update(assignment=assignment, metrics=metrics, gap=gap, optimal=self.optimal)
+            record = self.optimal
+            if custom:  # résultat propre à ce navigateur : on ne remplace pas la référence du serveur
+                self.optimal = previous
+            else:
+                save_json(self.settings.optimal_file, self.optimal)
+            out.update(assignment=assignment, metrics=metrics, gap=gap, optimal=record)
         return out
 
     def _auto_optimize(self) -> None:

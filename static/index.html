@@ -184,6 +184,24 @@
   </form>
 </dialog>
 
+<dialog id="team-dialog" class="swap-dialog team-dialog">
+  <form method="dialog">
+    <h3 id="te-title"></h3>
+    <label>Nom du club<input type="text" id="te-name" maxlength="120"></label>
+    <label>Adresse de la salle (ou commune)<input type="text" id="te-address" maxlength="300"
+      placeholder="ex. 66 route de Mulhouse, 68720 Illfurth"></label>
+    <p id="te-info" class="hint"></p>
+    <p class="hint">Les modifications sont enregistrées dans ce navigateur. Une nouvelle adresse recalcule les distances
+      routières et la version optimale.</p>
+    <p id="te-msg" class="message err"></p>
+    <div class="buttons end">
+      <button id="te-reset" class="hidden">Revenir aux données d'origine</button>
+      <button value="cancel">Annuler</button>
+      <button id="te-save" class="primary">Enregistrer</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="matches-dialog" class="swap-dialog">
   <form method="dialog">
     <h3 id="matches-title"></h3>

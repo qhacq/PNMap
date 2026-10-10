@@ -36,6 +36,7 @@ class OptimizeIn(BaseModel):
     fairness: float = Field(0.0, ge=0.0, le=1.0)
     time_limit: float | None = Field(None, gt=0, le=3600)
     hint: dict[int, str] | None = None
+    overrides: dict[int, dict] | None = None
 
 
 class LocationIn(BaseModel):
@@ -44,7 +45,16 @@ class LocationIn(BaseModel):
     address: str | None = None
 
 
-class ExportIn(AssignmentIn):
+class OverridesIn(BaseModel):
+    # Modifications faites dans le navigateur : {id: {name, lat, lon, label, adresse}}.
+    overrides: dict[int, dict] | None = None
+
+
+class GeocodeIn(BaseModel):
+    query: str = Field(min_length=2, max_length=300)
+
+
+class ExportIn(AssignmentIn, OverridesIn):
     label: str = "Ma version"
     optimal: dict[int, str] | None = None  # version optimale gardée par le navigateur (serverless)
     kind: Literal["distance", "duration"] = "distance"
@@ -172,13 +182,34 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
         return t.to_dict()
 
     # -- matrice et calculs ------------------------------------------------
-    @app.get("/api/matrix")
-    def get_matrix():
-        m = require_matrix()
-        s = st()
-        return {"ids": [t.id for t in s.teams], "source": m.source,
+    def resolve(overrides):
+        """Équipes, matrice et clé pour les modifications faites dans le navigateur."""
+        try:
+            return st().matrix_for(overrides)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc))
+
+    def matrix_payload(teams, m, key):
+        return {"ids": [t.id for t in teams], "source": m.source, "key": key,
                 "km": [[round(v / 1000, 3) for v in row] for row in m.distance_m],
                 "minutes": [[round(v / 60, 1) for v in row] for row in m.duration_s]}
+
+    @app.get("/api/matrix")
+    def get_matrix():
+        require_matrix()
+        return matrix_payload(*resolve(None))
+
+    @app.post("/api/matrix")
+    def post_matrix(body: OverridesIn):
+        return matrix_payload(*resolve(body.overrides))
+
+    @app.post("/api/geocode")
+    def post_geocode(body: GeocodeIn):
+        """Géocode une adresse saisie (fiche club) sans rien enregistrer côté serveur."""
+        loc = st().geocoder.geocode_address(body.query)
+        if not loc:
+            raise HTTPException(404, f"Adresse introuvable : {body.query}")
+        return loc
 
     @app.post("/api/evaluate")
     def post_evaluate(body: AssignmentIn):
@@ -205,30 +236,31 @@ def create_app(state: AppState | None = None, autostart: bool = True) -> FastAPI
         return Response(content, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     def export_context(body: ExportIn):
-        m = require_matrix()
         s = st()
-        metrics = evaluate(s.teams, m, check_assignment(body.assignment), s.pools)
+        teams, m, _ = resolve(body.overrides)
+        metrics = evaluate(teams, m, check_assignment(body.assignment), s.pools)
         opt_a = check_assignment(body.optimal) if body.optimal else s.optimal_assignment()
-        optimal = evaluate(s.teams, m, opt_a, s.pools) if opt_a else None
-        current = evaluate(s.teams, m, {t.id: t.current_pool for t in s.teams}, s.pools)
-        return s, m, metrics, optimal, current
+        optimal = evaluate(teams, m, opt_a, s.pools) if opt_a else None
+        current = evaluate(teams, m, {t.id: t.current_pool for t in teams}, s.pools)
+        return teams, m, metrics, optimal, current
 
     @app.post("/api/export/assignment.csv")
     def export_assignment(body: ExportIn):
-        s, m, metrics, optimal, current = export_context(body)
-        return attachment(exports.assignment_csv(s.teams, metrics, optimal, current, body.label),
+        teams, m, metrics, optimal, current = export_context(body)
+        return attachment(exports.assignment_csv(teams, metrics, optimal, current, body.label),
                           "text/csv; charset=utf-8", f"repartition_{exports.slug(body.label)}.csv")
 
     @app.post("/api/export/matrix.csv")
     def export_matrix(body: ExportIn):
-        m = require_matrix()
+        teams, m, _ = resolve(body.overrides)
         name = "matrice_durees.csv" if body.kind == "duration" else "matrice_distances.csv"
-        return attachment(exports.matrix_csv(st().teams, m, body.kind), "text/csv; charset=utf-8", name)
+        return attachment(exports.matrix_csv(teams, m, body.kind), "text/csv; charset=utf-8", name)
 
     @app.post("/api/export/report.pdf")
     def export_pdf(body: ExportIn):
-        s, m, metrics, optimal, current = export_context(body)
-        pdf = exports.report_pdf(s.teams, m, metrics, s.pools, optimal=optimal, current=current,
+        teams, m, metrics, optimal, current = export_context(body)
+        s = st()
+        pdf = exports.report_pdf(teams, m, metrics, s.pools, optimal=optimal, current=current,
                                  label=body.label, optimal_info=s.optimal, tiles=s.tiles)
         return attachment(pdf, "application/pdf", f"repartition_{exports.slug(body.label)}.pdf")
 

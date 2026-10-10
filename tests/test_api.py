@@ -302,3 +302,22 @@ def test_serverless_mode(tmp_path):
         # correction : traitée pendant la requête, sans fil d'exécution
         c.post("/api/teams/6/location", json={"lat": 48.3, "lon": 4.08})
         assert s._thread is None and s.team(6).located
+
+
+def test_browser_edits_change_distances(state, client):
+    ready(client, state)
+    base = client.get("/api/matrix").json()
+    assert base["key"]
+    # Équipe 4 (Reims) déplacée à Colmar par la fiche club : nouvelles distances, nouvelle clé.
+    ov = {"4": {"name": "REIMS (salle provisoire)", "lat": 48.0794, "lon": 7.3585, "label": "Colmar"}}
+    m = client.post("/api/matrix", json={"overrides": ov}).json()
+    assert m["key"] != base["key"] and m["km"][3][1] < base["km"][3][1]
+    r = client.post("/api/optimize", json={"pool_sizes": {"A": 3, "B": 3}, "overrides": ov, "time_limit": 5}).json()
+    assert r["optimal"]["matrix_key"] == m["key"]
+    assert client.get("/api/optimal").json()["optimal"]["matrix_key"] == base["key"]  # référence serveur intacte
+    current = {t["id"]: t["current_pool"] for t in client.get("/api/state").json()["teams"]}
+    csv = client.post("/api/export/assignment.csv", json={"assignment": current, "overrides": ov}).text
+    assert "REIMS (salle provisoire)" in csv
+    # Recherche d'adresse sans rien enregistrer
+    assert client.post("/api/geocode", json={"query": "Troyes"}).json()["lat"] == pytest.approx(48.2973)
+    assert client.post("/api/geocode", json={"query": "nulle part"}).status_code == 404

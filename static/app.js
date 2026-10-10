@@ -5,7 +5,7 @@ const POOL_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#00
 const POOL_SHAPES = ["circle", "square", "triangle", "diamond", "circle", "square"];
 const VERSION_NAMES = { current: "Poules actuelles", optimal: "Version optimale", mine: "Ma version" };
 const HISTORY_MAX = 200;
-const LS_UI = "pnmap-ui", LS_OPT = "pnmap-optimal";
+const LS_UI = "pnmap-ui", LS_OPT = "pnmap-optimal", LS_EDITS = "pnmap-edits";
 
 function readLocal(key) {
   try { return JSON.parse(localStorage.getItem(key) || "null"); } catch (_) { return null; }
@@ -99,8 +99,19 @@ function saveUi() {
 }
 
 // ------------------------------------------------------------------ calculs (côté navigateur, instantanés)
+/** Modifications faites dans le navigateur (fiche club) envoyées au serveur. */
+function editsOverrides() {
+  const out = {};
+  for (const [id, e] of Object.entries(S.edits || {})) {
+    if (e && (e.name || e.lat != null)) out[id] = e;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 async function loadMatrix() {
-  const m = await api("/api/matrix");
+  const overrides = editsOverrides();
+  const m = overrides ? await api("/api/matrix", { method: "POST", body: { overrides } }) : await api("/api/matrix");
+  S.clientKey = m.key;
   const n = m.ids.length;
   S.idx = Object.fromEntries(m.ids.map((id, i) => [id, i]));
   S.D = m.km;
@@ -278,6 +289,7 @@ function renderMap() {
     if (!mk) {
       mk = L.marker(ll, { icon, riseOnHover: true }).addTo(map);
       mk.on("click", () => selectTeam(t.id));
+      mk.on("dblclick", () => openTeamEditor(t.id));
       mk.on("mouseover", () => mk.openPopup());
       mk.on("mouseout", () => { if (S.selected !== t.id) mk.closePopup(); });
       markers[t.id] = mk;
@@ -486,7 +498,8 @@ function renderPools() {
   const editable = true;  // toute modification s'applique à Ma version (copiée depuis la vue affichée si besoin)
   $("#pools-title").textContent = `Poules : ${VERSION_NAMES[S.view]}`;
   $("#pools-hint").innerHTML = "Pour changer une équipe de poule : la glisser vers une autre poule, ou utiliser son bouton ⇄. " +
-    "Comme chaque poule garde 12 équipes, on choisit l'équipe à échanger, avec l'impact en km avant de valider." +
+    "Comme chaque poule garde 12 équipes, on choisit l'équipe à échanger, avec l'impact en km avant de valider. " +
+    "Double-clic sur une équipe (ou sur son marqueur) pour modifier son nom ou l'adresse de sa salle." +
     (S.view !== "mine" ? " La modification crée Ma version à partir de la répartition affichée." : "");
   box.style.setProperty("--n", S.pools.length);
   box.innerHTML = "";
@@ -559,6 +572,8 @@ function teamCard(t, A, M, O, editable) {
     }
   }
   el.addEventListener("click", () => selectTeam(t.id));
+  el.addEventListener("dblclick", e => { if (!e.target.closest("select, input, label")) openTeamEditor(t.id); });
+  el.title = "Double-clic : modifier le nom ou l'adresse";
   el.addEventListener("dragstart", e => { e.dataTransfer.setData("text/plain", String(t.id)); el.classList.add("dragging"); });
   el.addEventListener("dragend", () => el.classList.remove("dragging"));
   return el;
@@ -803,7 +818,9 @@ async function optimize(auto = false) {
   const s = readSettings();
   const locks = {};
   for (const id of S.locks) locks[id] = S.V.mine[id];
-  const body = auto ? { pool_sizes: s.pool_sizes, hint: S.V.current } : {
+  const overrides = editsOverrides();
+  const body = auto ? { pool_sizes: s.pool_sizes, hint: S.V.current, overrides } : {
+    overrides,
     ...s, locks,
     forbidden_pairs: S.pairs.filter(p => p.type === "forbidden").map(p => [p.a, p.b]),
     imposed_pairs: S.pairs.filter(p => p.type === "imposed").map(p => [p.a, p.b]),
@@ -870,7 +887,7 @@ async function doExport(btn) {
   try {
     const res = await api(`/api/export/${btn.dataset.export}`, {
       method: "POST", raw: true,
-      body: { assignment: A, label: VERSION_NAMES[v], kind: btn.dataset.kind || "distance", optimal: S.V.optimal },
+      body: { assignment: A, label: VERSION_NAMES[v], kind: btn.dataset.kind || "distance", optimal: S.V.optimal, overrides: editsOverrides() },
     });
     const blob = await res.blob();
     const fname = (res.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/)?.[1] || btn.dataset.export;
@@ -1040,7 +1057,7 @@ async function pollStatus() {
       S.jobRunning = st.job.running;
       renderStatus(st);
       // Résultats intermédiaires (matrice, version optimale) affichés sans attendre la fin de la tâche.
-      const changed = st.matrix_key !== S.matrixKey || (st.optimal_at || null) !== (S.optimalInfo?.computed_at || null);
+      const changed = st.matrix_key !== S.matrixKey || (st.optimal_at || null) !== S.serverOptimalAt;
       if (st.job.running && changed && st.matrix_ready) {
         S.matrixKey = st.matrix_key;
         await reloadData();
@@ -1072,21 +1089,116 @@ function renderStatus(st) {
   }
 }
 
+/** Applique à une équipe les modifications enregistrées dans ce navigateur. */
+function applyEdit(t) {
+  const e = S.edits?.[t.id];
+  if (!e) return t;
+  const u = { ...t, edited: true };
+  if (e.name) u.name = e.name;
+  if (e.lat != null && e.lon != null) {
+    Object.assign(u, { lat: e.lat, lon: e.lon, located: true, geo_label: e.label || "", geo_source: "modifié", adresse: e.adresse || t.adresse });
+  }
+  return u;
+}
+
+/** Version optimale correspondant aux distances actuelles : celle du serveur, ou celle de ce navigateur. */
+function chooseOptimal() {
+  const server = S.serverOptimal;
+  const local = readLocal(LS_OPT);
+  if (server && S.optimalFresh && server.matrix_key === S.clientKey) {
+    applyOptimal(server);
+  } else if (local && local.matrix_key && local.matrix_key === S.clientKey) {
+    applyOptimal(local);
+    S.optimalFresh = true;
+  } else if (editsOverrides() || S.serverless) {
+    applyOptimal(null);  // à recalculer pour ces distances
+  } else {
+    applyOptimal(server);
+  }
+}
+
+// ------------------------------------------------------------------ fiche club (double-clic)
+function openTeamEditor(id) {
+  const t = S.byId[id], o = S.orig[id];
+  if (!t) return;
+  const dlg = $("#team-dialog");
+  dlg.dataset.team = id;
+  $("#te-title").textContent = `Fiche club n° ${id}`;
+  $("#te-name").value = t.name;
+  $("#te-address").value = S.edits[id]?.adresse || t.adresse || t.commune || "";
+  $("#te-info").innerHTML = `Poule actuelle : <b>${esc(t.current_pool)}</b> · position utilisée : ${esc(t.geo_label || t.commune || "non localisée")}` +
+    (t.edited ? `<br><i>Modifié dans ce navigateur. Nom d'origine : ${esc(o.name)} ; adresse d'origine : ${esc(o.adresse || o.commune || "aucune")}.</i>` : "");
+  $("#te-msg").textContent = "";
+  $("#te-reset").classList.toggle("hidden", !t.edited);
+  dlg.showModal();
+  $("#te-name").focus();
+}
+
+async function saveTeamEditor() {
+  const dlg = $("#team-dialog");
+  const id = Number(dlg.dataset.team);
+  const t = S.byId[id], o = S.orig[id];
+  const name = $("#te-name").value.trim();
+  const address = $("#te-address").value.trim();
+  const prevAddress = S.edits[id]?.adresse || t.adresse || t.commune || "";
+  const edit = { ...(S.edits[id] || {}) };
+  edit.name = name && name !== o.name ? name : undefined;
+  let moved = false;
+  if (address && address !== prevAddress) {
+    $("#te-msg").textContent = "Recherche de l'adresse…";
+    try {
+      const loc = await api("/api/geocode", { method: "POST", body: { query: address } });
+      Object.assign(edit, { lat: loc.lat, lon: loc.lon, label: loc.label, adresse: address });
+      moved = true;
+    } catch (e) {
+      $("#te-msg").textContent = `${e.message}. Préciser l'adresse (rue, code postal, commune).`;
+      return;
+    }
+  }
+  if (edit.name === undefined && edit.lat == null) delete S.edits[id];
+  else S.edits[id] = JSON.parse(JSON.stringify(edit));
+  try { localStorage.setItem(LS_EDITS, JSON.stringify(S.edits)); } catch (_) { /* stockage indisponible */ }
+  dlg.close();
+  await afterTeamEdit(moved, `${name || o.name} : ${moved ? "adresse mise à jour, distances recalculées" : "modifié"}.`);
+}
+
+async function resetTeamEditor() {
+  const id = Number($("#team-dialog").dataset.team);
+  const moved = S.edits[id]?.lat != null;
+  delete S.edits[id];
+  try { localStorage.setItem(LS_EDITS, JSON.stringify(S.edits)); } catch (_) { /* stockage indisponible */ }
+  $("#team-dialog").close();
+  await afterTeamEdit(moved, "Données d'origine rétablies.");
+}
+
+async function afterTeamEdit(moved, message) {
+  if (moved) {
+    busy("Calcul des distances routières avec la nouvelle adresse…");
+    S.autoOptTried = false;  // la version optimale sera recalculée pour ces distances
+  }
+  try {
+    await reloadData();
+    toast(message, "ok");
+  } catch (e) {
+    toast(e.message, "err");
+  } finally {
+    busy(null);
+  }
+}
+
 async function loadState() {
   const st = await api("/api/state");
-  S.teams = st.teams;
-  S.byId = Object.fromEntries(st.teams.map(t => [t.id, t]));
+  S.orig = Object.fromEntries(st.teams.map(t => [t.id, { ...t }]));
+  S.edits = readLocal(LS_EDITS) || {};
+  S.teams = st.teams.map(t => applyEdit(t));
+  S.byId = Object.fromEntries(S.teams.map(t => [t.id, t]));
   S.matrixReady = st.matrix_ready;
   S.jobRunning = st.job.running;
   S.serverless = st.serverless;
   S.optimalFresh = st.optimal_fresh;
-  const local = readLocal(LS_OPT);
-  if (!(st.optimal && st.optimal_fresh) && local && local.matrix_key && local.matrix_key === st.matrix_key) {
-    applyOptimal(local);  // optimum calculé précédemment dans ce navigateur pour les mêmes distances
-    S.optimalFresh = true;
-  } else {
-    applyOptimal(st.optimal);
-  }
+  S.serverOptimal = st.optimal;
+  S.serverOptimalAt = st.optimal?.computed_at || null;
+  applyOptimal(st.optimal);
   renderStatus({ job: st.job, matrix_ready: st.matrix_ready, matrix_source: st.matrix_source, matrix_error: st.matrix_error });
   renderGeo();
   return st;
@@ -1098,6 +1210,7 @@ async function reloadData() {
   if (S.matrixReady) {
     await loadMatrix();
     S.matrixKey = st.matrix_key;
+    chooseOptimal();
   } else {
     S.R = S.H = S.D = null;
   }
@@ -1105,8 +1218,9 @@ async function reloadData() {
   if (!S.V[S.view]) S.view = "mine";
   setView(S.view);
   renderAll();
-  // Sur Vercel, aucun calcul ne tourne en arrière-plan : la page demande elle-même la version optimale.
-  if (S.serverless && S.matrixReady && !S.V.optimal && !S.autoOptTried) {
+  // Pas de version optimale pour ces distances (Vercel, ou adresses modifiées dans la fiche club) :
+  // la page la demande elle-même.
+  if (S.matrixReady && !S.V.optimal && !S.jobRunning && !S.autoOptTried) {
     S.autoOptTried = true;
     optimize(true);
   }
@@ -1163,6 +1277,8 @@ $$("#view-seg button").forEach(b => b.addEventListener("click", () => { setView(
 $("#link-mode").addEventListener("change", e => { S.linkMode = e.target.value; renderMap(); saveUi(); });
 $("#show-labels").addEventListener("change", () => { renderMap(); saveUi(); });
 $("#btn-optimize").addEventListener("click", () => optimize(false));
+$("#te-save").addEventListener("click", e => { e.preventDefault(); saveTeamEditor(); });
+$("#te-reset").addEventListener("click", e => { e.preventDefault(); resetTeamEditor(); });
 $("#btn-undo").addEventListener("click", undo);
 $("#btn-redo").addEventListener("click", redo);
 document.addEventListener("keydown", e => {

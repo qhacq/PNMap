@@ -77,6 +77,12 @@ Chaque carte de version indique ses km cumulés, l'écart en km et en % avec les
 - Survol d'un marqueur : commune, poule, kilométrage annuel, trajet le plus long. Clic : sélection de
   l'équipe et tracé de ses trajets.
 
+**Fiche club (double-clic)** : un double-clic sur une équipe (dans sa poule ou sur la carte) ouvre sa
+fiche pour changer son **nom** ou l'**adresse de sa salle**. La nouvelle adresse est géocodée, les distances
+routières et la version optimale sont recalculées. Ces modifications sont enregistrées dans le navigateur
+(« Revenir aux données d'origine » les annule) et reprises dans les exports. Pour les rendre définitives
+pour tout le monde, les reporter dans `data/clubs.csv`.
+
 **Modifier Ma version**
 - Glisser une équipe vers une autre poule, ou utiliser son menu **⇄**. Comme chaque poule garde son
   effectif, une fenêtre propose l'**échange** avec chaque équipe de la poule d'arrivée et affiche, avant
